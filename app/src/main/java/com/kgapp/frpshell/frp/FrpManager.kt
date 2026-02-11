@@ -70,6 +70,7 @@ class FrpManager(
         }.onFailure {
             FrpLogBus.append("[frp] failed: ${it.message ?: "unknown"}")
         }
+        frpcBinary.setExecutable(true)
     }
 
     suspend fun stop() {

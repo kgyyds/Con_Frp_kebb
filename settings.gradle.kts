@@ -11,9 +11,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven(url = "https://jitpack.io")
     }
 }
 
-rootProject.name = "Con_frp"
+rootProject.name = "FRPShell"
 include(":app")

@@ -1,28 +1,32 @@
 package com.kgapp.frpshell.ui
 
-import androidx.compose.material3.*
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.kgapp.frpshell.model.ShellTarget
-import com.kgapp.frpshell.server.TcpServer
 
 @Composable
 fun DrawerContent(
     current: ShellTarget,
+    clientIds: List<String>,
     onSelect: (ShellTarget) -> Unit
 ) {
-    Column {
-        NavigationDrawerItem(
-            label = { Text("FRP 日志") },
-            selected = current is ShellTarget.FrpLog,
-            onClick = { onSelect(ShellTarget.FrpLog) }
-        )
+    Text(text = "会话", modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
 
-        TcpServer.clients.values.forEach {
-            NavigationDrawerItem(
-                label = { Text(it.id) },
-                selected = current is ShellTarget.Client && current.id == it.id,
-                onClick = { onSelect(ShellTarget.Client(it.id)) }
-            )
-        }
+    NavigationDrawerItem(
+        label = { Text("frp 日志") },
+        selected = current is ShellTarget.FrpLog,
+        onClick = { onSelect(ShellTarget.FrpLog) }
+    )
+
+    clientIds.forEach { id ->
+        NavigationDrawerItem(
+            label = { Text(id) },
+            selected = current is ShellTarget.Client && current.id == id,
+            onClick = { onSelect(ShellTarget.Client(id)) }
+        )
     }
 }

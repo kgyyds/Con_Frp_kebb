@@ -3,6 +3,7 @@ package com.kgapp.frpshell.ui
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
@@ -31,18 +32,23 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
+    val isSettings = uiState.screen == ScreenDestination.Settings
+
     ModalNavigationDrawer(
         drawerState = drawerState,
+        gesturesEnabled = !isSettings,
         drawerContent = {
-            ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.34f)) {
-                DrawerContent(
-                    current = uiState.selectedTarget,
-                    clientIds = uiState.clientIds,
-                    onSelect = {
-                        vm.onSelectTarget(it)
-                        scope.launch { drawerState.close() }
-                    }
-                )
+            if (!isSettings) {
+                ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.34f)) {
+                    DrawerContent(
+                        current = uiState.selectedTarget,
+                        clientIds = uiState.clientIds,
+                        onSelect = {
+                            vm.onSelectTarget(it)
+                            scope.launch { drawerState.close() }
+                        }
+                    )
+                }
             }
         }
     ) {
@@ -50,37 +56,58 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
             modifier = Modifier.fillMaxSize(),
             topBar = {
                 TopAppBar(
-                    title = { Text("FRP Shell", style = MaterialTheme.typography.titleMedium) },
+                    title = {
+                        Text(
+                            if (isSettings) "设置" else "FRP Shell",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    },
                     navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Menu, contentDescription = "open drawer")
+                        IconButton(
+                            onClick = {
+                                if (isSettings) {
+                                    vm.navigateBackToMain()
+                                } else {
+                                    scope.launch { drawerState.open() }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                if (isSettings) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                contentDescription = if (isSettings) "back" else "open drawer"
+                            )
                         }
                     },
                     actions = {
-                        IconButton(onClick = vm::openSettings) {
-                            Icon(Icons.Default.Settings, contentDescription = "settings")
+                        if (!isSettings) {
+                            IconButton(onClick = vm::openSettings) {
+                                Icon(Icons.Default.Settings, contentDescription = "settings")
+                            }
                         }
                     }
                 )
             }
         ) { padding ->
-            ShellScreen(
-                modifier = Modifier.fillMaxSize(),
-                target = uiState.selectedTarget,
-                onSend = vm::sendCommand,
-                contentPadding = padding
-            )
-        }
-
-        if (uiState.showConfigEditor) {
-            ConfigEditorDialog(
-                config = uiState.configContent,
-                firstLaunch = uiState.firstLaunchFlow,
-                onChange = vm::onConfigChanged,
-                onDismiss = vm::closeConfigEditor,
-                onSave = vm::saveConfigOnly,
-                onSaveAndRestart = vm::saveAndRestartFrp
-            )
+            if (isSettings) {
+                SettingsScreen(
+                    configContent = uiState.configContent,
+                    useSu = uiState.useSu,
+                    suAvailable = uiState.suAvailable,
+                    firstLaunchFlow = uiState.firstLaunchFlow,
+                    onConfigChanged = vm::onConfigChanged,
+                    onUseSuChanged = vm::onUseSuChanged,
+                    onSave = vm::saveConfigOnly,
+                    onSaveAndRestart = vm::saveAndRestartFrp,
+                    contentPadding = padding
+                )
+            } else {
+                ShellScreen(
+                    modifier = Modifier.fillMaxSize(),
+                    target = uiState.selectedTarget,
+                    onSend = vm::sendCommand,
+                    contentPadding = padding
+                )
+            }
         }
     }
 }

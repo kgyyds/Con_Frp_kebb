@@ -3,25 +3,35 @@ package com.kgapp.frpshell.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kgapp.frpshell.frp.FrpLogBus
 import com.kgapp.frpshell.frp.FrpManager
 import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.server.TcpServer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+enum class ScreenDestination {
+    Main,
+    Settings
+}
+
 data class MainUiState(
     val selectedTarget: ShellTarget = ShellTarget.FrpLog,
     val clientIds: List<String> = emptyList(),
-    val showConfigEditor: Boolean = false,
+    val screen: ScreenDestination = ScreenDestination.Main,
     val configContent: String = "",
-    val firstLaunchFlow: Boolean = false
+    val firstLaunchFlow: Boolean = false,
+    val suAvailable: Boolean = false,
+    val useSu: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val frpManager = FrpManager(application.applicationContext, viewModelScope)
+    private val settingsStore = SettingsStore(application.applicationContext)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -31,28 +41,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             TcpServer.clientIds.collect { ids ->
                 _uiState.update { state ->
-                    val current = state.selectedTarget
-                    val safeTarget = if (current is ShellTarget.Client && current.id !in ids) {
+                    val safeTarget = if (state.selectedTarget is ShellTarget.Client && state.selectedTarget.id !in ids) {
                         ShellTarget.FrpLog
                     } else {
-                        current
+                        state.selectedTarget
                     }
                     state.copy(clientIds = ids, selectedTarget = safeTarget)
                 }
             }
         }
 
-        val configExists = frpManager.configExists()
-        val content = if (configExists) frpManager.readConfig() else DEFAULT_CONFIG_TEMPLATE
-        _uiState.update {
-            it.copy(
-                showConfigEditor = !configExists,
-                firstLaunchFlow = !configExists,
-                configContent = content
-            )
-        }
-        if (configExists) {
-            frpManager.start()
+        viewModelScope.launch(Dispatchers.IO) {
+            val initialized = settingsStore.isInitialized()
+            val suAvailable = FrpManager.detectSuAvailable()
+            val useSuDefault = if (initialized) settingsStore.getUseSu() else suAvailable
+            if (!initialized) {
+                settingsStore.setUseSu(useSuDefault)
+                settingsStore.setInitialized(true)
+            }
+
+            val configExists = frpManager.configExists()
+            val content = if (configExists) frpManager.readConfig() else DEFAULT_CONFIG_TEMPLATE
+
+            _uiState.update {
+                it.copy(
+                    screen = if (configExists) ScreenDestination.Main else ScreenDestination.Settings,
+                    firstLaunchFlow = !configExists,
+                    configContent = content,
+                    suAvailable = suAvailable,
+                    useSu = useSuDefault
+                )
+            }
+
+            if (configExists) {
+                if (useSuDefault && !suAvailable) {
+                    FrpLogBus.append("[settings] su enabled but unavailable, start may fail")
+                }
+                frpManager.start(useSuDefault)
+            }
         }
     }
 
@@ -64,26 +90,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(configContent = content) }
     }
 
-    fun saveConfigOnly() {
-        val content = _uiState.value.configContent
-        frpManager.saveConfig(content)
-        _uiState.update { it.copy(showConfigEditor = false, firstLaunchFlow = false) }
-    }
-
-    fun saveAndRestartFrp() {
-        saveConfigOnly()
-        viewModelScope.launch {
-            frpManager.restart()
-        }
+    fun onUseSuChanged(enabled: Boolean) {
+        _uiState.update { it.copy(useSu = enabled) }
     }
 
     fun openSettings() {
-        _uiState.update { it.copy(showConfigEditor = true, firstLaunchFlow = false) }
+        _uiState.update { it.copy(screen = ScreenDestination.Settings, firstLaunchFlow = false) }
     }
 
-    fun closeConfigEditor() {
+    fun navigateBackToMain() {
         _uiState.update { state ->
-            if (state.firstLaunchFlow) state else state.copy(showConfigEditor = false)
+            if (state.firstLaunchFlow) state else state.copy(screen = ScreenDestination.Main)
+        }
+    }
+
+    fun saveConfigOnly() {
+        val state = _uiState.value
+        frpManager.saveConfig(state.configContent)
+        settingsStore.setUseSu(state.useSu)
+        _uiState.update { it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main) }
+        FrpLogBus.append("[settings] saved (useSu=${state.useSu})")
+    }
+
+    fun saveAndRestartFrp() {
+        val state = _uiState.value
+        frpManager.saveConfig(state.configContent)
+        settingsStore.setUseSu(state.useSu)
+        _uiState.update { it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main) }
+
+        viewModelScope.launch {
+            if (state.useSu && !state.suAvailable) {
+                FrpLogBus.append("[settings] su enabled but unavailable, start may fail")
+            }
+            frpManager.restart(state.useSu)
         }
     }
 

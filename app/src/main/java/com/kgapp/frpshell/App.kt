@@ -1,12 +1,12 @@
 package com.kgapp.frpshell
 
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import com.kgapp.frpshell.ui.MainScaffold
+import com.kgapp.frpshell.ui.theme.FrpShellTheme
 
 @Composable
 fun App() {
-    MaterialTheme {
+    FrpShellTheme {
         MainScaffold()
     }
 }

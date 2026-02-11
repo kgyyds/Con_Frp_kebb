@@ -1,37 +1,60 @@
 package com.kgapp.frpshell.server
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.net.Socket
-import java.util.concurrent.LinkedBlockingQueue
 
 class ClientSession(
     val id: String,
-    private val socket: Socket
+    private val socket: Socket,
+    private val scope: CoroutineScope
 ) {
-    val output = MutableStateFlow("")
-    val sendQueue = LinkedBlockingQueue<String>()
-    @Volatile var alive = true
+    private val _output = MutableStateFlow("")
+    val output: StateFlow<String> = _output.asStateFlow()
+
+    private var recvJob: Job? = null
 
     fun start() {
-        // recv
-        Thread {
-            val reader = socket.getInputStream().bufferedReader()
-            while (alive) {
-                val line = reader.readLine() ?: break
-                output.value += line + "\n"
+        recvJob = scope.launch(Dispatchers.IO) {
+            runCatching {
+                socket.getInputStream().bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        _output.value += "$line\n"
+                    }
+                }
+            }.onFailure {
+                _output.value += "[session closed] ${it.message ?: "unknown"}\n"
             }
-            alive = false
-        }.start()
+            close()
+        }
+    }
 
-        // send
-        Thread {
-            val writer = socket.getOutputStream().bufferedWriter()
-            while (alive) {
-                val cmd = sendQueue.take()
-                writer.write(cmd)
-                writer.newLine()
-                writer.flush()
+    fun send(command: String) {
+        if (command.isBlank()) return
+        scope.launch(Dispatchers.IO) {
+            if (!isActive) return@launch
+            runCatching {
+                socket.getOutputStream().bufferedWriter().apply {
+                    write(command)
+                    newLine()
+                    flush()
+                }
+            }.onFailure {
+                _output.value += "[send failed] ${it.message ?: "unknown"}\n"
             }
-        }.start()
+        }
+    }
+
+    fun close() {
+        runCatching { socket.close() }
+        recvJob?.cancel()
+        scope.cancel()
     }
 }

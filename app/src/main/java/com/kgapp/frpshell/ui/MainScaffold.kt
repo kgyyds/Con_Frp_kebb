@@ -1,9 +1,11 @@
 package com.kgapp.frpshell.ui
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,13 +28,13 @@ import kotlinx.coroutines.launch
 @Composable
 fun MainScaffold(vm: MainViewModel = viewModel()) {
     val uiState by vm.uiState.collectAsState()
-    val drawerState = rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet {
+            ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.34f)) {
                 DrawerContent(
                     current = uiState.selectedTarget,
                     clientIds = uiState.clientIds,

@@ -18,6 +18,8 @@ class FrpManager(
     private var process: Process? = null
     private var stdoutJob: Job? = null
     private var stderrJob: Job? = null
+    @Volatile
+    private var permissionPrepared = false
 
     fun configExists(): Boolean = configFile.exists()
 
@@ -37,8 +39,12 @@ class FrpManager(
             FrpLogBus.append("[frp] frpc.toml not found")
             return
         }
-        ensureFrpcBinaryReady()
-        stopAsync()
+
+        if (!ensureFrpcBinaryReady()) {
+            FrpLogBus.append("[frp] frpc not executable")
+            return
+        }
+
         runCatching {
             val started = ProcessBuilder(
                 frpcBinary.absolutePath,
@@ -47,6 +53,10 @@ class FrpManager(
             ).start()
             process = started
             FrpLogBus.append("[frp] started")
+
+            stdoutJob?.cancel()
+            stderrJob?.cancel()
+
             stdoutJob = scope.launch(Dispatchers.IO) {
                 started.inputStream.bufferedReader().forEachLine {
                     FrpLogBus.append(it)
@@ -60,6 +70,7 @@ class FrpManager(
         }.onFailure {
             FrpLogBus.append("[frp] failed: ${it.message ?: "unknown"}")
         }
+        frpcBinary.setExecutable(true)
     }
 
     suspend fun stop() {
@@ -72,18 +83,29 @@ class FrpManager(
         FrpLogBus.append("[frp] stopped")
     }
 
-    private fun stopAsync() {
-        scope.launch { stop() }
-    }
-
-    private fun ensureFrpcBinaryReady() {
+    private fun ensureFrpcBinaryReady(): Boolean {
         if (!frpcBinary.exists()) {
             context.assets.open("frpc").use { input ->
                 frpcBinary.outputStream().use { out ->
                     input.copyTo(out)
                 }
             }
+            permissionPrepared = false
         }
-        frpcBinary.setExecutable(true)
+
+        if (!permissionPrepared || !frpcBinary.canExecute()) {
+            val chmodResult = runCatching {
+                ProcessBuilder("/system/bin/chmod", "777", frpcBinary.absolutePath)
+                    .start()
+                    .waitFor()
+            }.getOrElse { -1 }
+
+            if (chmodResult != 0 && !frpcBinary.setExecutable(true, false)) {
+                return false
+            }
+            permissionPrepared = true
+        }
+
+        return frpcBinary.canExecute()
     }
 }

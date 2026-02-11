@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+.kotlin/
+
+# Local configuration
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+
+# Generated files
+**/build/
+**/captures/
+
+# APKs and binaries
+*.apk
+*.aab
+*.ap_
+*.so
+*.jar
+*.aar
+*.dex
+*.class
+*.keystore
+*.jks
+*.zip
+
+# Mac/Windows
+.DS_Store
+Thumbs.db

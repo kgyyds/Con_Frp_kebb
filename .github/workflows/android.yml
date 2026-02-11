@@ -1,0 +1,99 @@
+name: Android CI
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检查配置
+        uses: actions/checkout@v4
+
+      - name: 安装JDK17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: 设置Gradlew权限
+        run: chmod +x gradlew
+
+      # ===== Release 签名：仅 tag 触发时准备 keystore =====
+      - name: 解码Release签名keystore
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "${{ secrets.SIGNING_KEYSTORE_B64 }}" | base64 -d > ${{ github.workspace }}/release.jks
+          ls -l ${{ github.workspace }}/release.jks
+
+      - name: 构建APK
+        env:
+          # 仅 Release 构建会用到这些环境变量（Debug 不会用）
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "当前为标签触发，构建Release APK"
+            ./gradlew assembleRelease
+          else
+            echo "当前无标签，构建Debug APK"
+            ./gradlew assembleDebug
+          fi
+
+      - name: 上传APK到Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-apk
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
+
+      # tag 才创建 GitHub Release
+      - name: 创建Release并上传APK
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: KGAPP ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            app/build/outputs/apk/release/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ===== OSS 上传部分 =====
+      - name: 安装阿里云OSS套件
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          curl -L https://gosspublic.alicdn.com/ossutil/1.7.9/ossutil64 \
+            -o /usr/local/bin/ossutil
+          chmod +x /usr/local/bin/ossutil
+
+      - name: 上传APK到阿里云OSS
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          OSS_KEY: ${{ secrets.ALI_OSS_KEY }}
+          OSS_SECRET: ${{ secrets.ALI_OSS_SECRET }}
+        run: |
+          ossutil config \
+            --access-key-id=$OSS_KEY \
+            --access-key-secret=$OSS_SECRET \
+            --endpoint=oss-cn-guangzhou.aliyuncs.com
+
+          ossutil cp \
+            app/build/outputs/apk/release/app-release.apk \
+            oss://kgyydsgithub/ci-builds/快查成绩查询.apk \
+            -f

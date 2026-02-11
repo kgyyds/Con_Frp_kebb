@@ -19,7 +19,6 @@ local.properties
 *.aab
 *.ap_
 *.so
-*.jar
 *.aar
 *.dex
 *.class

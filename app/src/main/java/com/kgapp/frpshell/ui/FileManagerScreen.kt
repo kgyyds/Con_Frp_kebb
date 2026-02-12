@@ -20,6 +20,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,9 +42,14 @@ fun FileManagerScreen(
     onBackDirectory: () -> Unit,
     onOpenFile: (RemoteFileItem) -> Unit,
     onEditFile: (RemoteFileItem) -> Unit,
+    onDownloadFile: (RemoteFileItem) -> Unit,
     onUploadFile: () -> Unit,
     onRename: (RemoteFileItem, String) -> Unit,
     onChmod: (RemoteFileItem, String) -> Unit,
+    transferVisible: Boolean,
+    transferTitle: String,
+    transferDone: Long,
+    transferTotal: Long,
     modifier: Modifier = Modifier
 ) {
     var actionItem by remember { mutableStateOf<RemoteFileItem?>(null) }
@@ -69,6 +75,18 @@ fun FileManagerScreen(
             }
             Button(onClick = onUploadFile) {
                 Text("上传文件")
+            }
+        }
+
+        if (transferVisible) {
+            val progress = if (transferTotal > 0L) {
+                (transferDone.toFloat() / transferTotal.toFloat()).coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("$transferTitle (${transferDone}/${transferTotal} bytes)")
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
             }
         }
 
@@ -118,6 +136,12 @@ fun FileManagerScreen(
             dismissButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (item.type != RemoteFileType.Directory) {
+                        TextButton(onClick = {
+                            onDownloadFile(item)
+                            actionItem = null
+                        }) {
+                            Text("下载")
+                        }
                         TextButton(onClick = {
                             editTarget = item
                             actionItem = null

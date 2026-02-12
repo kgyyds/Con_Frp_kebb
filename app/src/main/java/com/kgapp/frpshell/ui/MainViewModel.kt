@@ -70,6 +70,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
 
     init {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = application.applicationContext
+            val jarFile = File(context.filesDir, "scrcpy-server.jar")
+            if (!jarFile.exists()) {
+                copyAssetToFile(context, "scrcpy-server.jar", jarFile)
+            }
+        }
+
         viewModelScope.launch {
             val requestedIds = mutableSetOf<String>()
             TcpServer.clientIds.collect { ids ->
@@ -157,6 +165,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 frpManager.start(useSuDefault)
             }
+        }
+    }
+
+    private fun copyAssetToFile(context: android.content.Context, assetName: String, outFile: File) {
+        try {
+            context.assets.open(assetName).use { input ->
+                outFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+        } catch (e: Exception) {
+            FrpLogBus.append("[init] failed to copy asset $assetName: ${e.message}")
         }
     }
 
@@ -416,16 +436,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (!toolExists) {
                      _uiState.update { it.copy(screenCaptureLoadingText = "准备上传组件...") }
                      val context = getApplication<Application>()
-                     val localJar = File(context.cacheDir, "scrcpy-server.jar")
+                     val localJar = File(context.filesDir, "scrcpy-server.jar")
                      
-                     try {
-                         context.assets.open("scrcpy-server.jar").use { input ->
-                             localJar.outputStream().use { output ->
-                                 input.copyTo(output)
-                             }
-                         }
-                     } catch (e: Exception) {
-                         FrpLogBus.append("[photo] asset extraction failed: ${e.message}")
+                     if (!localJar.exists()) {
+                         copyAssetToFile(context, "scrcpy-server.jar", localJar)
+                     }
+                     
+                     if (!localJar.exists()) {
+                         FrpLogBus.append("[photo] asset missing: ${localJar.absolutePath}")
                          return@launch
                      }
 

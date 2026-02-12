@@ -119,20 +119,5 @@ class FrpManager(
                 ProcessBuilder("su", "-c", "echo frpshell").start().waitFor() == 0
             }.getOrDefault(false)
         }
-
-        if (!permissionPrepared || !frpcBinary.canExecute()) {
-            val chmodResult = runCatching {
-                ProcessBuilder("/system/bin/chmod", "777", frpcBinary.absolutePath)
-                    .start()
-                    .waitFor()
-            }.getOrElse { -1 }
-
-            if (chmodResult != 0 && !frpcBinary.setExecutable(true, false)) {
-                return false
-            }
-            permissionPrepared = true
-        }
-
-        return frpcBinary.canExecute()
     }
 }

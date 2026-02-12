@@ -495,7 +495,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             
                       
                       
-            val cmd = "nohup sh -c \"(CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1)\" &"
+            val cmd = "nohup sh -c \"CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1 &\""
 
             // Fire and forget
             session.runManagedCommand(cmd)  

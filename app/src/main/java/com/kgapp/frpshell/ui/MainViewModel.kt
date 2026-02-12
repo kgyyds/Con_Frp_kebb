@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.security.MessageDigest
 
 enum class ScreenDestination {
     Main,
@@ -246,7 +247,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun closeFileEditor() {
         _uiState.update { state ->
             if (!state.fileEditorVisible) return@update state
-            val hasUnsaved = state.fileEditorContent != state.fileEditorOriginalContent
+            val hasUnsaved = sha256(state.fileEditorContent) != sha256(state.fileEditorOriginalContent)
             if (hasUnsaved) state.copy(fileEditorConfirmDiscardVisible = true)
             else state.copy(fileEditorVisible = false, fileEditorConfirmDiscardVisible = false)
         }
@@ -267,7 +268,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveEditor() {
         val state = _uiState.value
         if (!state.fileEditorVisible) return
-        if (state.fileEditorContent == state.fileEditorOriginalContent) {
+        if (sha256(state.fileEditorContent) == sha256(state.fileEditorOriginalContent)) {
             FrpLogBus.append("[editor] no changes, skip upload")
             return
         }
@@ -455,6 +456,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val trimmed = path.trimEnd('/')
         val idx = trimmed.lastIndexOf('/')
         return if (idx <= 0) "/" else trimmed.substring(0, idx)
+    }
+
+
+    private fun sha256(text: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(text.toByteArray())
+        return digest.joinToString("") { "%02x".format(it) }
     }
 
     override fun onCleared() {

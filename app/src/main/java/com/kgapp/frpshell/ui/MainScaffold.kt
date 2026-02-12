@@ -2,6 +2,7 @@ package com.kgapp.frpshell.ui
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
@@ -39,12 +40,22 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScaffold(vm: MainViewModel = viewModel()) {
+    data class PickedUploadFile(val file: File, val displayName: String)
     val uiState by vm.uiState.collectAsState()
 
-    fun copyUriToCache(context: Context, uri: Uri): File? {
-        val name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "upload.bin"
+    fun copyUriToCache(context: Context, uri: Uri): PickedUploadFile? {
+        val displayName = runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getString(0)
+                } else null
+            }
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: "upload.bin"
+
         return runCatching {
-            val target = File(context.cacheDir, "picked_${System.currentTimeMillis()}_$name")
+            val target = File(context.cacheDir, "picked_${System.currentTimeMillis()}_${displayName}")
             context.contentResolver.openInputStream(uri)?.use { input ->
                 target.outputStream().use { out ->
                     val buffer = ByteArray(4096)
@@ -56,7 +67,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                     out.flush()
                 }
             } ?: return null
-            target
+            PickedUploadFile(file = target, displayName = displayName)
         }.getOrNull()
     }
 
@@ -67,7 +78,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
         val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             val resolved = uri ?: return@rememberLauncherForActivityResult
             val local = copyUriToCache(context, resolved)
-            if (local != null) vm.uploadLocalFileToCurrentDirectory(local, local.name.substringAfter('_', local.name))
+            if (local != null) vm.uploadLocalFileToCurrentDirectory(local.file, local.displayName)
         }
 
         val isSettings = uiState.screen == ScreenDestination.Settings

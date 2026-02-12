@@ -53,7 +53,9 @@ data class MainUiState(
     val screenViewerImagePath: String = "",
     val screenViewerTimestamp: Long = 0L,
     val screenCaptureLoading: Boolean = false,
+    val screenCaptureLoadingText: String = "正在截屏...",
     val screenCaptureCancelable: Boolean = false,
+    val cameraSelectorVisible: Boolean = false,
     val clientModels: Map<String, String> = emptyMap()
 )
 
@@ -336,7 +338,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.screenCaptureLoading) return
 
         captureJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(screenCaptureLoading = true, screenCaptureCancelable = false) }
+            _uiState.update { it.copy(screenCaptureLoading = true, screenCaptureCancelable = false, screenCaptureLoadingText = "正在截屏...") }
 
             // Delay 4 seconds before showing cancel button
             val cancelTimer = launch {
@@ -375,6 +377,105 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                      FrpLogBus.append("[screen] capture failed: download error")
                 }
+            } finally {
+                cancelTimer.cancel()
+                _uiState.update { it.copy(screenCaptureLoading = false) }
+            }
+        }
+    }
+
+    fun openCameraSelector() {
+        _uiState.update { it.copy(cameraSelectorVisible = true) }
+    }
+
+    fun closeCameraSelector() {
+        _uiState.update { it.copy(cameraSelectorVisible = false) }
+    }
+
+    fun takePhoto(cameraId: Int) {
+        val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
+        if (_uiState.value.screenCaptureLoading) return
+        closeCameraSelector()
+
+        captureJob = viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(screenCaptureLoading = true, screenCaptureCancelable = false, screenCaptureLoadingText = "准备中...") }
+
+            val cancelTimer = launch {
+                kotlinx.coroutines.delay(4000)
+                _uiState.update { it.copy(screenCaptureCancelable = true) }
+            }
+
+            try {
+                val session = TcpServer.getClient(target.id) ?: return@launch
+                
+                // 1. Check tool
+                _uiState.update { it.copy(screenCaptureLoadingText = "检查环境...") }
+                val checkResult = session.runManagedCommand("ls /data/local/tmp/scrcpy-server.jar")
+                val toolExists = checkResult?.contains("scrcpy-server.jar") == true
+
+                if (!toolExists) {
+                     _uiState.update { it.copy(screenCaptureLoadingText = "上传组件...") }
+                     val context = getApplication<Application>()
+                     val localJar = File(context.cacheDir, "scrcpy-server.jar")
+                     
+                     try {
+                         context.assets.open("scrcpy-server.jar").use { input ->
+                             localJar.outputStream().use { output ->
+                                 input.copyTo(output)
+                             }
+                         }
+                     } catch (e: Exception) {
+                         FrpLogBus.append("[photo] asset extraction failed: ${e.message}")
+                         return@launch
+                     }
+
+                     val ok = session.uploadFile("/data/local/tmp/scrcpy-server.jar", localJar)
+                     if (!ok) {
+                         FrpLogBus.append("[photo] upload failed")
+                         return@launch
+                     }
+                     
+                     session.runManagedCommand("chmod 777 /data/local/tmp/scrcpy-server.jar")
+                     
+                     val recheck = session.runManagedCommand("ls /data/local/tmp/scrcpy-server.jar")
+                     if (recheck?.contains("scrcpy-server.jar") != true) {
+                         FrpLogBus.append("[photo] verify upload failed")
+                         return@launch
+                     }
+                }
+
+                // 2. Take photo
+                _uiState.update { it.copy(screenCaptureLoadingText = "正在拍照...") }
+                val cmd = "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId ; echo \"donePhoto\""
+                
+                val output = session.runManagedCommand(cmd, timeoutMs = 12000)
+                
+                if (output?.contains("donePhoto") == true) {
+                    _uiState.update { it.copy(screenCaptureLoadingText = "获取照片...") }
+                    val remotePath = "/data/local/tmp/scrcpy_test.jpg"
+                    val cacheFile = File(getApplication<Application>().cacheDir, "photo_${System.currentTimeMillis()}.jpg")
+                    
+                    val result = session.downloadFile(remotePath, cacheFile)
+                    
+                    if (result == ClientSession.DownloadResult.Success) {
+                         _uiState.update { 
+                             it.copy(
+                                 screenViewerVisible = true, 
+                                 screenViewerImagePath = cacheFile.absolutePath,
+                                 screenViewerTimestamp = System.currentTimeMillis()
+                             )
+                         }
+                         FrpLogBus.append("[photo] success")
+                         session.runManagedCommand("rm /data/local/tmp/scrcpy_test.jpg")
+                    } else {
+                        FrpLogBus.append("[photo] download failed")
+                    }
+                } else {
+                    FrpLogBus.append("[photo] failed or timed out")
+                }
+
+            } catch (e: Exception) {
+                FrpLogBus.append("[photo] error: ${e.message}")
             } finally {
                 cancelTimer.cancel()
                 _uiState.update { it.copy(screenCaptureLoading = false) }

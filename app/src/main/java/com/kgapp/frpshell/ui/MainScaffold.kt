@@ -14,6 +14,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
@@ -148,6 +149,9 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 }
                             } else if (!isSettings && !uiState.screenViewerVisible) {
                                 if (!uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client) {
+                                    IconButton(onClick = vm::openCameraSelector) {
+                                        Icon(Icons.Default.PhotoCamera, contentDescription = "take photo")
+                                    }
                                     IconButton(onClick = vm::captureScreen) {
                                         Icon(Icons.Default.Image, contentDescription = "capture screen")
                                     }
@@ -276,10 +280,10 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
             if (uiState.screenCaptureLoading) {
                 AlertDialog(
                     onDismissRequest = {},
-                    title = { Text("正在截屏...") },
+                    title = { Text(uiState.screenCaptureLoadingText) },
                     text = {
                         Column {
-                            Text("请稍候，正在获取远程屏幕截图。")
+                            Text("请稍候...")
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
                         }
                     },
@@ -289,6 +293,31 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             TextButton(onClick = vm::cancelScreenCapture) {
                                 Text("取消")
                             }
+                        }
+                    }
+                )
+            }
+
+            if (uiState.cameraSelectorVisible) {
+                AlertDialog(
+                    onDismissRequest = vm::closeCameraSelector,
+                    title = { Text("选择摄像头") },
+                    text = {
+                        Column {
+                            (0..3).forEach { id ->
+                                TextButton(
+                                    onClick = { vm.takePhoto(id) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Camera ID: $id")
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = vm::closeCameraSelector) {
+                            Text("取消")
                         }
                     }
                 )

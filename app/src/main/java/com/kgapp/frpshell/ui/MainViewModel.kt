@@ -470,7 +470,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(screenCaptureLoadingText = "正在拍照...") }
                 val cmd = "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId ; echo \"donePhoto\""
                 
-                val output = session.runManagedCommand(cmd, timeoutMs = 12000)
+                val output = session.runManagedCommand(cmd, timeoutMs = 25000)
                 
                 if (output?.contains("donePhoto") == true) {
                     _uiState.update { it.copy(screenCaptureLoadingText = "准备获取照片...") }

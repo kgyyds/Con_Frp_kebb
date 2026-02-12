@@ -302,6 +302,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 FrpLogBus.append("[editor] upload failed: ${state.fileEditorRemotePath}")
             }
         }
+    }
+
     fun captureScreen() {
         val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
         viewModelScope.launch(Dispatchers.IO) {

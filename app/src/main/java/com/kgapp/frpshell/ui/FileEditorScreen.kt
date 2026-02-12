@@ -37,7 +37,6 @@ fun FileEditorScreen(
     fontSizeSp: Float,
     contentPadding: PaddingValues,
     onContentChange: (String) -> Unit,
-    onSave: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()

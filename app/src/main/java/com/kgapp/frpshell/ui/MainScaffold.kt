@@ -185,7 +185,6 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             fontSizeSp = uiState.shellFontSizeSp,
                             contentPadding = padding,
                             onContentChange = vm::onEditorContentChanged,
-                            onSave = vm::saveEditor,
                             modifier = Modifier.fillMaxSize()
                         )
                     }

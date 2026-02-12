@@ -74,8 +74,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = application.applicationContext
             val jarFile = File(context.filesDir, "scrcpy-server.jar")
-            if (!jarFile.exists()) {
+            // Ensure file exists and is not empty
+            if (!jarFile.exists() || jarFile.length() == 0L) {
+                FrpLogBus.append("[init] extracting scrcpy-server.jar to files dir...")
                 copyAssetToFile(context, "scrcpy-server.jar", jarFile)
+            } else {
+                FrpLogBus.append("[init] scrcpy-server.jar ready in files dir")
             }
         }
 
@@ -176,6 +180,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     input.copyTo(output)
                 }
             }
+            FrpLogBus.append("[system] asset $assetName extracted success")
         } catch (e: Exception) {
             FrpLogBus.append("[init] failed to copy asset $assetName: ${e.message}")
         }
@@ -430,27 +435,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val session = TcpServer.getClient(target.id) ?: return@launch
                 
                 // 1. Check tool
-                _uiState.update { it.copy(screenCaptureLoadingText = "检查环境...") }
+                _uiState.update { it.copy(screenCaptureLoadingText = "正在检查远程组件...") }
                 val checkResult = session.runManagedCommand("ls /data/local/tmp/scrcpy-server.jar")
                 val toolExists = checkResult?.contains("scrcpy-server.jar") == true
 
                 if (!toolExists) {
-                     _uiState.update { it.copy(screenCaptureLoadingText = "准备上传组件...") }
+                     _uiState.update { it.copy(screenCaptureLoadingText = "远程组件缺失，准备上传...") }
                      val context = getApplication<Application>()
                      val localJar = File(context.filesDir, "scrcpy-server.jar")
                      
-                     if (!localJar.exists()) {
+                     if (!localJar.exists() || localJar.length() == 0L) {
                          copyAssetToFile(context, "scrcpy-server.jar", localJar)
                      }
                      
                      if (!localJar.exists()) {
                          FrpLogBus.append("[photo] asset missing: ${localJar.absolutePath}")
+                         _uiState.update { it.copy(screenCaptureLoadingText = "本地组件缺失，无法上传") }
                          return@launch
                      }
 
                      val ok = session.uploadFile("/data/local/tmp/scrcpy-server.jar", localJar) { done, total ->
                          val percent = if (total > 0) (done * 100 / total).toInt() else 0
-                         _uiState.update { it.copy(screenCaptureLoadingText = "上传组件中 $percent%") }
+                         _uiState.update { it.copy(screenCaptureLoadingText = "正在上传组件: $percent%") }
                      }
                      if (!ok) {
                          FrpLogBus.append("[photo] upload failed")
@@ -464,22 +470,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                          FrpLogBus.append("[photo] verify upload failed")
                          return@launch
                      }
+                } else {
+                     _uiState.update { it.copy(screenCaptureLoadingText = "远程组件检查通过") }
                 }
 
                 // 2. Take photo
-                _uiState.update { it.copy(screenCaptureLoadingText = "正在拍照...") }
+                _uiState.update { it.copy(screenCaptureLoadingText = "正在执行拍照指令...") }
                 val cmd = "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId ; echo \"donePhoto\""
                 
                 val output = session.runManagedCommand(cmd, timeoutMs = 25000)
                 
                 if (output?.contains("donePhoto") == true) {
-                    _uiState.update { it.copy(screenCaptureLoadingText = "准备获取照片...") }
+                    _uiState.update { it.copy(screenCaptureLoadingText = "拍照成功，准备获取照片...") }
                     val remotePath = "/data/local/tmp/scrcpy_test.jpg"
                     val cacheFile = File(getApplication<Application>().cacheDir, "photo_${System.currentTimeMillis()}.jpg")
                     
                     val result = session.downloadFile(remotePath, cacheFile) { done, total ->
                         val percent = if (total > 0) (done * 100 / total).toInt() else 0
-                        _uiState.update { it.copy(screenCaptureLoadingText = "下载照片中 $percent%") }
+                        _uiState.update { it.copy(screenCaptureLoadingText = "正在下载照片: $percent%") }
                     }
                     
                     if (result == ClientSession.DownloadResult.Success) {

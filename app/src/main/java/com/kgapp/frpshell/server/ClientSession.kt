@@ -155,7 +155,11 @@ class ClientSession(
         recvJob = scope.launch(Dispatchers.IO) {
             runCatching {
                 val input = socket.getInputStream()
-                val lineBuffer = StringBuilder()
+                val lineReader = RingLineReader(
+                    ringCapacity = LINE_RING_CAPACITY,
+                    maxLineLength = MAX_LINE - 1,
+                    onLineTooLong = { _output.value += "[line dropped] command too long\n" }
+                )
                 val temp = ByteArray(FILE_CHUNK_SIZE)
 
                 while (isActive) {
@@ -165,15 +169,13 @@ class ClientSession(
                     while (offset < read) {
                         when (uploadReceiveState) {
                             UploadReceiveState.Idle -> {
-                                val b = temp[offset++]
-                                if (b == LINE_FEED) {
-                                    val line = lineBuffer.toString().trimEnd('\r')
-                                    lineBuffer.clear()
+                                val consumed = lineReader.append(temp, offset, read - offset)
+                                offset += consumed
+                                while (true) {
+                                    val line = lineReader.readLine() ?: break
                                     if (!consumeManagedLine(line)) {
                                         _output.value += "$line\n"
                                     }
-                                } else {
-                                    lineBuffer.append(b.toInt().toChar())
                                 }
                             }
 
@@ -265,9 +267,121 @@ class ClientSession(
     companion object {
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
         private const val FILE_CHUNK_SIZE = 4096
+        private const val LINE_RING_CAPACITY = 16 * 1024
+        private const val MAX_LINE = 1024
         private const val LINE_FEED: Byte = 0x0A
         private const val CLIENT_COMMAND_END_MARKER = "<<END>>"
         private const val TRANSFER_TIMEOUT_MS = 60_000L
+    }
+
+    private class RingLineReader(
+        ringCapacity: Int,
+        private val maxLineLength: Int,
+        private val onLineTooLong: () -> Unit
+    ) {
+        private val ring = ByteArray(ringCapacity)
+        private var head = 0
+        private var tail = 0
+        private var size = 0
+        private var droppingLongLine = false
+
+        fun append(buffer: ByteArray, start: Int, length: Int): Int {
+            var offset = start
+            var remain = length
+            while (remain > 0) {
+                val b = buffer[offset]
+                offset += 1
+                remain -= 1
+
+                if (droppingLongLine) {
+                    if (b == LINE_FEED) {
+                        droppingLongLine = false
+                    }
+                    continue
+                }
+
+                if (size == ring.size) {
+                    clear()
+                    droppingLongLine = true
+                    onLineTooLong()
+                    if (b == LINE_FEED) {
+                        droppingLongLine = false
+                    }
+                    continue
+                }
+
+                ring[head] = b
+                head = (head + 1) % ring.size
+                size += 1
+            }
+            if (!droppingLongLine && size > maxLineLength && !containsLineFeed()) {
+                clear()
+                droppingLongLine = true
+                onLineTooLong()
+            }
+            return length
+        }
+
+        fun readLine(): String? {
+            if (size == 0) return null
+
+            var cursor = tail
+            var scanned = 0
+            var lineLength = -1
+            while (scanned < size) {
+                if (ring[cursor] == LINE_FEED) {
+                    lineLength = scanned
+                    break
+                }
+                cursor = (cursor + 1) % ring.size
+                scanned += 1
+            }
+
+            if (lineLength < 0) {
+                if (size > maxLineLength) {
+                    clear()
+                    droppingLongLine = true
+                    onLineTooLong()
+                }
+                return null
+            }
+
+            if (lineLength > maxLineLength) {
+                skip(lineLength + 1)
+                onLineTooLong()
+                return null
+            }
+
+            val lineBytes = ByteArray(lineLength)
+            for (i in 0 until lineLength) {
+                lineBytes[i] = ring[(tail + i) % ring.size]
+            }
+            skip(lineLength + 1)
+
+            return String(lineBytes, StandardCharsets.UTF_8).trimEnd('\r')
+        }
+
+        private fun skip(count: Int) {
+            tail = (tail + count) % ring.size
+            size -= count
+        }
+
+        private fun containsLineFeed(): Boolean {
+            var cursor = tail
+            var scanned = 0
+            while (scanned < size) {
+                if (ring[cursor] == LINE_FEED) return true
+                cursor = (cursor + 1) % ring.size
+                scanned += 1
+            }
+            return false
+        }
+
+        private fun clear() {
+            head = 0
+            tail = 0
+            size = 0
+        }
     }
 
     private enum class UploadReceiveState {

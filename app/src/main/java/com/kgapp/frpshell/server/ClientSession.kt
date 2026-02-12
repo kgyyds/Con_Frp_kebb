@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,7 +14,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.io.InputStream
+import java.io.FileOutputStream
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -38,9 +37,16 @@ class ClientSession(
     private val sendMutex = Mutex()
     private val managedCommandMutex = Mutex()
     private val transferMutex = Mutex()
+    private val transferStateMutex = Mutex()
 
     @Volatile
     private var activeCapture: CaptureState? = null
+
+    @Volatile
+    private var uploadReceiveState: UploadReceiveState = UploadReceiveState.Idle
+
+    @Volatile
+    private var uploadContext: UploadContext? = null
 
     fun start() {
         startReceiver()
@@ -83,63 +89,56 @@ class ClientSession(
         if (!localFile.exists() || !localFile.isFile) return false
 
         return transferMutex.withLock {
-            pauseReceiverForTransfer {
-                val size = localFile.length()
-                val out = socket.getOutputStream()
+            val size = localFile.length()
+            val out = socket.getOutputStream()
 
-                sendMutex.withLock {
-                    out.write("upload $remotePath\n".toByteArray(StandardCharsets.UTF_8))
-                    out.write(longToBigEndian(size))
-                    out.write(LINE_FEED.toInt())
-                    localFile.inputStream().use { input ->
-                        val buffer = ByteArray(FILE_CHUNK_SIZE)
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read <= 0) break
-                            out.write(buffer, 0, read)
-                        }
+            sendMutex.withLock {
+                out.write("upload $remotePath\n".toByteArray(StandardCharsets.UTF_8))
+                out.write(longToBigEndian(size))
+                out.write(LINE_FEED.toInt())
+                localFile.inputStream().use { input ->
+                    val buffer = ByteArray(FILE_CHUNK_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        out.write(buffer, 0, read)
                     }
-                    out.flush()
                 }
-                true
+                out.flush()
             }
+            true
         }
     }
 
     suspend fun downloadFile(remotePath: String, targetFile: File): DownloadResult {
         if (!remotePath.startsWith("/")) return DownloadResult.Failed
         return transferMutex.withLock {
-            pauseReceiverForTransfer {
-                val input = socket.getInputStream()
-                val out = socket.getOutputStream()
+            val deferred = CompletableDeferred<DownloadResult>()
+            val tmpFile = File(targetFile.parentFile ?: File("."), "${targetFile.name}.part")
+            var prepared = false
 
-                sendMutex.withLock {
-                    out.write("download $remotePath\n".toByteArray(StandardCharsets.UTF_8))
-                    out.flush()
+            transferStateMutex.withLock {
+                if (uploadContext == null && uploadReceiveState == UploadReceiveState.Idle) {
+                    uploadContext = UploadContext(
+                        targetFile = targetFile,
+                        tmpFile = tmpFile,
+                        result = deferred
+                    )
+                    uploadReceiveState = UploadReceiveState.WaitUploadHeader
+                    prepared = true
                 }
+            }
 
-                val sizeBytes = readExact(input, 8) ?: return@pauseReceiverForTransfer DownloadResult.Failed
-                val separator = input.read()
-                if (separator != LINE_FEED.toInt()) return@pauseReceiverForTransfer DownloadResult.Failed
-                val size = bigEndianToLong(sizeBytes)
-                if (size <= 0L) {
-                    return@pauseReceiverForTransfer DownloadResult.NotFound
-                }
+            if (!prepared) return@withLock DownloadResult.Failed
 
-                targetFile.parentFile?.mkdirs()
-                targetFile.outputStream().use { fileOut ->
-                    var remain = size
-                    val buffer = ByteArray(FILE_CHUNK_SIZE)
-                    while (remain > 0) {
-                        val want = minOf(buffer.size.toLong(), remain).toInt()
-                        val read = input.read(buffer, 0, want)
-                        if (read <= 0) return@pauseReceiverForTransfer DownloadResult.Failed
-                        fileOut.write(buffer, 0, read)
-                        remain -= read
-                    }
-                    fileOut.flush()
-                }
-                DownloadResult.Success
+            sendMutex.withLock {
+                socket.getOutputStream().write("download $remotePath\n".toByteArray(StandardCharsets.UTF_8))
+                socket.getOutputStream().flush()
+            }
+
+            withTimeoutOrNull(TRANSFER_TIMEOUT_MS) { deferred.await() } ?: run {
+                resetUploadState("transfer timeout", cleanupFile = true)
+                DownloadResult.Failed
             }
         }
     }
@@ -155,15 +154,41 @@ class ClientSession(
     private fun startReceiver() {
         recvJob = scope.launch(Dispatchers.IO) {
             runCatching {
-                socket.getInputStream().bufferedReader().useLines { lines ->
-                    lines.forEach { line ->
-                        if (line == CLIENT_COMMAND_END_MARKER) return@forEach
-                        if (!consumeManagedLine(line)) {
-                            _output.value += "$line\n"
+                val input = socket.getInputStream()
+                val lineBuffer = StringBuilder()
+                val temp = ByteArray(FILE_CHUNK_SIZE)
+
+                while (isActive) {
+                    val read = input.read(temp)
+                    if (read <= 0) break
+                    var offset = 0
+                    while (offset < read) {
+                        when (uploadReceiveState) {
+                            UploadReceiveState.Idle -> {
+                                val b = temp[offset++]
+                                if (b == LINE_FEED) {
+                                    val line = lineBuffer.toString().trimEnd('\r')
+                                    lineBuffer.clear()
+                                    if (!consumeManagedLine(line)) {
+                                        _output.value += "$line\n"
+                                    }
+                                } else {
+                                    lineBuffer.append(b.toInt().toChar())
+                                }
+                            }
+
+                            UploadReceiveState.WaitUploadHeader -> {
+                                offset += consumeUploadHeader(temp, offset, read - offset)
+                            }
+
+                            UploadReceiveState.RecvUploadBody -> {
+                                offset += consumeUploadBody(temp, offset, read - offset)
+                            }
                         }
                     }
                 }
             }.onFailure {
+                resetUploadState(it.message ?: "receiver error", cleanupFile = true)
                 if (!closed.get()) {
                     _output.value += "[session closed] ${it.message ?: "unknown"}\n"
                 }
@@ -185,18 +210,6 @@ class ClientSession(
                     _output.value += "[send failed] ${it.message ?: "unknown"}\n"
                 }
             }.isSuccess
-        }
-    }
-
-    private suspend fun <T> pauseReceiverForTransfer(block: suspend () -> T): T {
-        recvJob?.cancelAndJoin()
-        recvJob = null
-        return try {
-            block()
-        } finally {
-            if (!closed.get()) {
-                startReceiver()
-            }
         }
     }
 
@@ -223,17 +236,6 @@ class ClientSession(
 
         capture.buffer.append(line).append('\n')
         return true
-    }
-
-    private fun readExact(input: InputStream, size: Int): ByteArray? {
-        val out = ByteArray(size)
-        var offset = 0
-        while (offset < size) {
-            val read = input.read(out, offset, size - offset)
-            if (read <= 0) return null
-            offset += read
-        }
-        return out
     }
 
     private fun longToBigEndian(value: Long): ByteArray {
@@ -265,5 +267,128 @@ class ClientSession(
         private const val FILE_CHUNK_SIZE = 4096
         private const val LINE_FEED: Byte = 0x0A
         private const val CLIENT_COMMAND_END_MARKER = "<<END>>"
+        private const val TRANSFER_TIMEOUT_MS = 60_000L
+    }
+
+    private enum class UploadReceiveState {
+        Idle,
+        WaitUploadHeader,
+        RecvUploadBody
+    }
+
+    private data class UploadContext(
+        val targetFile: File,
+        val tmpFile: File,
+        val headerBuffer: ByteArray = ByteArray(8),
+        var headerOffset: Int = 0,
+        var waitSeparator: Boolean = true,
+        var remaining: Long = 0,
+        var outputStream: FileOutputStream? = null,
+        val result: CompletableDeferred<DownloadResult>
+    )
+
+    private fun consumeUploadHeader(buffer: ByteArray, start: Int, length: Int): Int {
+        val context = uploadContext ?: return length
+        var offset = start
+        var remain = length
+
+        if (context.headerOffset < 8) {
+            val copy = minOf(8 - context.headerOffset, remain)
+            System.arraycopy(buffer, offset, context.headerBuffer, context.headerOffset, copy)
+            context.headerOffset += copy
+            offset += copy
+            remain -= copy
+        }
+
+        if (context.headerOffset < 8) {
+            return length
+        }
+
+        if (context.waitSeparator && remain > 0) {
+            val separator = buffer[offset]
+            offset += 1
+            remain -= 1
+            if (separator != LINE_FEED) {
+                resetUploadState("invalid upload separator", cleanupFile = true)
+                return length
+            }
+            context.waitSeparator = false
+        }
+
+        if (context.waitSeparator) {
+            return length
+        }
+
+        val size = bigEndianToLong(context.headerBuffer)
+        if (size <= 0L) {
+            val result = if (size == 0L) DownloadResult.NotFound else DownloadResult.Failed
+            completeUploadState(result, cleanupFile = true)
+            return length - remain
+        }
+
+        context.tmpFile.parentFile?.mkdirs()
+        context.outputStream = runCatching { context.tmpFile.outputStream() }.getOrElse {
+            resetUploadState("open temp file failed: ${it.message}", cleanupFile = true)
+            return length - remain
+        }
+        context.remaining = size
+        uploadReceiveState = UploadReceiveState.RecvUploadBody
+        return length - remain
+    }
+
+    private fun consumeUploadBody(buffer: ByteArray, start: Int, length: Int): Int {
+        val context = uploadContext ?: return length
+        if (context.remaining <= 0) {
+            completeUploadState(DownloadResult.Success, cleanupFile = false)
+            return 0
+        }
+
+        val writeSize = minOf(length.toLong(), context.remaining).toInt()
+        runCatching {
+            context.outputStream?.write(buffer, start, writeSize)
+            context.remaining -= writeSize
+        }.onFailure {
+            resetUploadState("write upload body failed: ${it.message}", cleanupFile = true)
+            return length
+        }
+
+        if (context.remaining == 0L) {
+            runCatching { context.outputStream?.flush() }
+            runCatching { context.outputStream?.close() }
+            context.outputStream = null
+            if (!context.tmpFile.renameTo(context.targetFile)) {
+                resetUploadState("rename temp file failed", cleanupFile = true)
+                return writeSize
+            }
+            completeUploadState(DownloadResult.Success, cleanupFile = false)
+        }
+        return writeSize
+    }
+
+    private fun completeUploadState(result: DownloadResult, cleanupFile: Boolean) {
+        val context = uploadContext
+        if (context != null && !context.result.isCompleted) {
+            context.result.complete(result)
+        }
+        resetUploadState(null, cleanupFile)
+    }
+
+    private fun resetUploadState(reason: String?, cleanupFile: Boolean) {
+        val context = uploadContext
+        if (context != null) {
+            runCatching { context.outputStream?.close() }
+            context.outputStream = null
+            if (cleanupFile) {
+                runCatching { context.tmpFile.delete() }
+            }
+            if (!context.result.isCompleted) {
+                context.result.complete(DownloadResult.Failed)
+            }
+        }
+        uploadContext = null
+        uploadReceiveState = UploadReceiveState.Idle
+        if (reason != null) {
+            _output.value += "[transfer reset] $reason\n"
+        }
     }
 }

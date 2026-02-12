@@ -40,6 +40,8 @@ fun FileManagerScreen(
     onRefresh: () -> Unit,
     onBackDirectory: () -> Unit,
     onOpenFile: (RemoteFileItem) -> Unit,
+    onEditFile: (RemoteFileItem) -> Unit,
+    onUploadFile: () -> Unit,
     onRename: (RemoteFileItem, String) -> Unit,
     onChmod: (RemoteFileItem, String) -> Unit,
     modifier: Modifier = Modifier
@@ -47,6 +49,7 @@ fun FileManagerScreen(
     var actionItem by remember { mutableStateOf<RemoteFileItem?>(null) }
     var renameTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
     var chmodTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
+    var editTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
 
     Column(
         modifier = modifier
@@ -63,6 +66,9 @@ fun FileManagerScreen(
             }
             Button(onClick = onRefresh) {
                 Text("刷新")
+            }
+            Button(onClick = onUploadFile) {
+                Text("上传文件")
             }
         }
 
@@ -110,11 +116,21 @@ fun FileManagerScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    chmodTarget = item
-                    actionItem = null
-                }) {
-                    Text("权限设置")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (item.type != RemoteFileType.Directory) {
+                        TextButton(onClick = {
+                            editTarget = item
+                            actionItem = null
+                        }) {
+                            Text("编辑")
+                        }
+                    }
+                    TextButton(onClick = {
+                        chmodTarget = item
+                        actionItem = null
+                    }) {
+                        Text("权限设置")
+                    }
                 }
             }
         )
@@ -179,4 +195,26 @@ fun FileManagerScreen(
             }
         )
     }
+
+    editTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { editTarget = null },
+            title = { Text("编辑文件") },
+            text = { Text("打开并编辑 ${target.name} ?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onEditFile(target)
+                    editTarget = null
+                }) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editTarget = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
 }

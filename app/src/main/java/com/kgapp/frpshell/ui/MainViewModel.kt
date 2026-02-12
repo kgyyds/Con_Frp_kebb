@@ -281,6 +281,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (ok) {
                 _uiState.update { it.copy(fileEditorOriginalContent = it.fileEditorContent, fileEditorConfirmDiscardVisible = false) }
                 FrpLogBus.append("[editor] upload success: ${state.fileEditorRemotePath}")
+                refreshCurrentDirectory()
             } else {
                 FrpLogBus.append("[editor] upload failed: ${state.fileEditorRemotePath}")
             }
@@ -306,7 +307,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            openEditorForRemoteFile(item)
+            downloadRemoteFileToCache(item)
         }
     }
 
@@ -338,6 +339,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             executeFileManagerCommand("chmod $mode ${shellEscape(item.name)}")
             refreshCurrentDirectory()
+        }
+    }
+
+
+    fun fileManagerEdit(item: RemoteFileItem) {
+        if (item.type == RemoteFileType.Directory) return
+        viewModelScope.launch(Dispatchers.IO) {
+            openEditorForRemoteFile(item)
+        }
+    }
+
+    fun uploadLocalFileToCurrentDirectory(localFile: File, fileName: String) {
+        if (!localFile.exists() || !localFile.isFile) {
+            FrpLogBus.append("[file-manager] local file missing: ${localFile.absolutePath}")
+            return
+        }
+
+        val cleanName = fileName.trim()
+        if (cleanName.isBlank()) {
+            FrpLogBus.append("[file-manager] invalid upload file name")
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val remotePath = appendPath(_uiState.value.fileManagerPath, cleanName)
+            val session = currentFileManagerSession() ?: return@launch
+            val ok = session.uploadFile(remotePath, localFile)
+            if (ok) {
+                FrpLogBus.append("[file-manager] upload success: $remotePath")
+                refreshCurrentDirectory()
+            } else {
+                FrpLogBus.append("[file-manager] upload failed: $remotePath")
+            }
+        }
+    }
+
+    private suspend fun downloadRemoteFileToCache(item: RemoteFileItem) {
+        val state = _uiState.value
+        val remotePath = appendPath(state.fileManagerPath, item.name)
+        val cacheFile = File(getApplication<Application>().cacheDir, "download_${state.fileManagerClientId}_${item.name}")
+        val session = currentFileManagerSession() ?: return
+
+        when (session.downloadFile(remotePath, cacheFile)) {
+            ClientSession.DownloadResult.Success -> FrpLogBus.append("[file-manager] download success: $remotePath -> ${cacheFile.absolutePath}")
+            ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[file-manager] remote file not found: $remotePath")
+            ClientSession.DownloadResult.Failed -> FrpLogBus.append("[file-manager] download failed: $remotePath")
         }
     }
 

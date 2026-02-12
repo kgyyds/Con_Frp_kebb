@@ -1,5 +1,10 @@
 package com.kgapp.frpshell.ui
 
+import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import java.io.File
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
@@ -25,6 +30,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.ui.theme.FrpShellTheme
@@ -35,9 +41,34 @@ import kotlinx.coroutines.launch
 fun MainScaffold(vm: MainViewModel = viewModel()) {
     val uiState by vm.uiState.collectAsState()
 
+    fun copyUriToCache(context: Context, uri: Uri): File? {
+        val name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "upload.bin"
+        return runCatching {
+            val target = File(context.cacheDir, "picked_${System.currentTimeMillis()}_$name")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { out ->
+                    val buffer = ByteArray(4096)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        out.write(buffer, 0, read)
+                    }
+                    out.flush()
+                }
+            } ?: return null
+            target
+        }.getOrNull()
+    }
+
     FrpShellTheme(themeMode = uiState.themeMode) {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
+        val context = LocalContext.current
+        val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            val resolved = uri ?: return@rememberLauncherForActivityResult
+            val local = copyUriToCache(context, resolved)
+            if (local != null) vm.uploadLocalFileToCurrentDirectory(local, local.name.substringAfter('_', local.name))
+        }
 
         val isSettings = uiState.screen == ScreenDestination.Settings
 
@@ -140,6 +171,8 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             onRefresh = vm::fileManagerRefresh,
                             onBackDirectory = vm::fileManagerBackDirectory,
                             onOpenFile = vm::fileManagerOpen,
+                            onEditFile = vm::fileManagerEdit,
+                            onUploadFile = { uploadLauncher.launch("*/*") },
                             onRename = vm::fileManagerRename,
                             onChmod = vm::fileManagerChmod,
                             modifier = Modifier.fillMaxSize()

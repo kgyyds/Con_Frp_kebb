@@ -157,6 +157,7 @@ class ClientSession(
             runCatching {
                 socket.getInputStream().bufferedReader().useLines { lines ->
                     lines.forEach { line ->
+                        if (line == CLIENT_COMMAND_END_MARKER) return@forEach
                         if (!consumeManagedLine(line)) {
                             _output.value += "$line\n"
                         }
@@ -201,6 +202,10 @@ class ClientSession(
 
     private fun consumeManagedLine(line: String): Boolean {
         val capture = activeCapture ?: return false
+
+        if (line == CLIENT_COMMAND_END_MARKER) {
+            return true
+        }
 
         if (!capture.started) {
             if (line == capture.beginMarker) {
@@ -259,5 +264,6 @@ class ClientSession(
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
         private const val FILE_CHUNK_SIZE = 4096
         private const val LINE_FEED: Byte = 0x0A
+        private const val CLIENT_COMMAND_END_MARKER = "<<END>>"
     }
 }

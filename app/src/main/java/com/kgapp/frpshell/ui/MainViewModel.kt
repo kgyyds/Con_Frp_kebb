@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.kgapp.frpshell.frp.FrpLogBus
 import com.kgapp.frpshell.frp.FrpManager
 import com.kgapp.frpshell.model.ShellTarget
+import com.kgapp.frpshell.server.ClientSession
 import com.kgapp.frpshell.server.TcpServer
 import com.kgapp.frpshell.ui.theme.ThemeMode
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 
 enum class ScreenDestination {
     Main,
@@ -35,7 +37,12 @@ data class MainUiState(
     val fileManagerVisible: Boolean = false,
     val fileManagerClientId: String? = null,
     val fileManagerPath: String = "/",
-    val fileManagerFiles: List<RemoteFileItem> = emptyList()
+    val fileManagerFiles: List<RemoteFileItem> = emptyList(),
+    val fileEditorVisible: Boolean = false,
+    val fileEditorRemotePath: String = "",
+    val fileEditorCachePath: String = "",
+    val fileEditorOriginalContent: String = "",
+    val fileEditorContent: String = ""
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -54,12 +61,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         state.selectedTarget
                     }
-                    val fileManagerVisible = state.fileManagerVisible && state.fileManagerClientId in ids
+                    val managerAlive = state.fileManagerVisible && state.fileManagerClientId in ids
+                    val editorAlive = state.fileEditorVisible && state.fileManagerClientId in ids
                     state.copy(
                         clientIds = ids,
                         selectedTarget = safeTarget,
-                        fileManagerVisible = fileManagerVisible,
-                        fileManagerClientId = if (fileManagerVisible) state.fileManagerClientId else null
+                        fileManagerVisible = managerAlive,
+                        fileEditorVisible = editorAlive,
+                        fileManagerClientId = if (managerAlive || editorAlive) state.fileManagerClientId else null
                     )
                 }
             }
@@ -156,16 +165,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         TcpServer.start(localPort)
 
         _uiState.update {
-            it.copy(
-                firstLaunchFlow = false,
-                screen = ScreenDestination.Main,
-                localPort = localPort,
-                selectedTarget = ShellTarget.FrpLog
-            )
+            it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main, localPort = localPort, selectedTarget = ShellTarget.FrpLog)
         }
-        FrpLogBus.append(
-            "[settings] saved (useSu=${state.useSu}, theme=${state.themeMode}, localPort=$localPort, font=${state.shellFontSizeSp})"
-        )
+        FrpLogBus.append("[settings] saved (useSu=${state.useSu}, theme=${state.themeMode}, localPort=$localPort, font=${state.shellFontSizeSp})")
     }
 
     fun saveAndRestartFrp() {
@@ -179,12 +181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         TcpServer.start(localPort)
 
         _uiState.update {
-            it.copy(
-                firstLaunchFlow = false,
-                screen = ScreenDestination.Main,
-                localPort = localPort,
-                selectedTarget = ShellTarget.FrpLog
-            )
+            it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main, localPort = localPort, selectedTarget = ShellTarget.FrpLog)
         }
 
         viewModelScope.launch {
@@ -206,9 +203,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopFrp() {
-        viewModelScope.launch {
-            frpManager.stop()
-        }
+        viewModelScope.launch { frpManager.stop() }
     }
 
     fun sendCommand(command: String) {
@@ -220,14 +215,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openFileManager() {
         val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
-
         _uiState.update {
-            it.copy(
-                fileManagerVisible = true,
-                fileManagerClientId = target.id,
-                fileManagerPath = "/",
-                fileManagerFiles = emptyList()
-            )
+            it.copy(fileManagerVisible = true, fileEditorVisible = false, fileManagerClientId = target.id, fileManagerPath = "/", fileManagerFiles = emptyList())
         }
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -240,31 +229,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 fileManagerVisible = false,
+                fileEditorVisible = false,
                 fileManagerClientId = null,
                 fileManagerPath = "/",
-                fileManagerFiles = emptyList()
+                fileManagerFiles = emptyList(),
+                fileEditorRemotePath = "",
+                fileEditorCachePath = "",
+                fileEditorOriginalContent = "",
+                fileEditorContent = ""
             )
         }
     }
 
-    fun fileManagerRefresh() {
+    fun closeFileEditor() {
+        _uiState.update { it.copy(fileEditorVisible = false) }
+    }
+
+    fun onEditorContentChanged(content: String) {
+        _uiState.update { it.copy(fileEditorContent = content) }
+    }
+
+    fun saveEditor() {
+        val state = _uiState.value
+        if (!state.fileEditorVisible) return
+        if (state.fileEditorContent == state.fileEditorOriginalContent) {
+            FrpLogBus.append("[editor] no changes, skip upload")
+            return
+        }
+
+        val cacheFile = File(state.fileEditorCachePath)
+        cacheFile.writeText(state.fileEditorContent)
+
         viewModelScope.launch(Dispatchers.IO) {
-            refreshCurrentDirectory()
+            val session = currentFileManagerSession() ?: return@launch
+            val ok = session.uploadFile(state.fileEditorRemotePath, cacheFile)
+            if (ok) {
+                _uiState.update { it.copy(fileEditorOriginalContent = it.fileEditorContent) }
+                FrpLogBus.append("[editor] upload success: ${state.fileEditorRemotePath}")
+            } else {
+                FrpLogBus.append("[editor] upload failed: ${state.fileEditorRemotePath}")
+            }
         }
     }
 
+    fun fileManagerRefresh() {
+        viewModelScope.launch(Dispatchers.IO) { refreshCurrentDirectory() }
+    }
+
     fun fileManagerOpen(item: RemoteFileItem) {
-        if (item.type != RemoteFileType.Directory) return
+        if (item.type == RemoteFileType.Directory) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val ok = executeFileManagerCommand("cd ${shellEscape(item.name)}")
+                if (ok) {
+                    _uiState.update { state -> state.copy(fileManagerPath = appendPath(state.fileManagerPath, item.name)) }
+                    refreshCurrentDirectory()
+                }
+            }
+            return
+        }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val escaped = shellEscape(item.name)
-            val ok = executeFileManagerCommand("cd $escaped")
-            if (ok) {
-                _uiState.update { state ->
-                    state.copy(fileManagerPath = appendPath(state.fileManagerPath, item.name))
-                }
-                refreshCurrentDirectory()
-            }
+            openEditorForRemoteFile(item)
         }
     }
 
@@ -283,7 +308,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun fileManagerRename(item: RemoteFileItem, newName: String) {
         if (newName.isBlank()) return
-
         viewModelScope.launch(Dispatchers.IO) {
             executeFileManagerCommand("mv ${shellEscape(item.name)} ${shellEscape(newName)}")
             refreshCurrentDirectory()
@@ -292,50 +316,72 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun fileManagerChmod(item: RemoteFileItem, mode: String) {
         if (!mode.matches(Regex("\\d{3,4}"))) return
-
         viewModelScope.launch(Dispatchers.IO) {
             executeFileManagerCommand("chmod $mode ${shellEscape(item.name)}")
             refreshCurrentDirectory()
         }
     }
 
-    private suspend fun refreshCurrentDirectory() {
-        val output = executeFileManagerCommandAndGetOutput("ls -F") ?: return
-        val parsed = LsFParser.parse(output)
-        _uiState.update { it.copy(fileManagerFiles = parsed) }
-    }
-
-    private suspend fun executeFileManagerCommand(command: String): Boolean {
-        return executeFileManagerCommandAndGetOutput(command) != null
-    }
-
-    private suspend fun executeFileManagerCommandAndGetOutput(command: String): String? {
+    private suspend fun openEditorForRemoteFile(item: RemoteFileItem) {
         val state = _uiState.value
-        val clientId = state.fileManagerClientId ?: return null
-        val session = TcpServer.getClient(clientId) ?: return null
+        val remotePath = appendPath(state.fileManagerPath, item.name)
+        val cacheFile = File(getApplication<Application>().cacheDir, "editor_${state.fileManagerClientId}_${item.name}.tmp")
+        val session = currentFileManagerSession() ?: return
 
-        return session.runManagedCommand(command).also {
-            if (it == null) {
-                FrpLogBus.append("[file-manager] command failed: $command")
+        when (session.downloadFile(remotePath, cacheFile)) {
+            ClientSession.DownloadResult.Success -> {
+                val content = runCatching { cacheFile.readText() }.getOrElse { "" }
+                _uiState.update {
+                    it.copy(
+                        fileEditorVisible = true,
+                        fileEditorRemotePath = remotePath,
+                        fileEditorCachePath = cacheFile.absolutePath,
+                        fileEditorOriginalContent = content,
+                        fileEditorContent = content
+                    )
+                }
+                FrpLogBus.append("[editor] download success: $remotePath")
+            }
+
+            ClientSession.DownloadResult.NotFound -> {
+                FrpLogBus.append("[editor] remote file not found: $remotePath")
+            }
+
+            ClientSession.DownloadResult.Failed -> {
+                FrpLogBus.append("[editor] download failed: $remotePath")
             }
         }
     }
 
+    private suspend fun refreshCurrentDirectory() {
+        val output = executeFileManagerCommandAndGetOutput("ls -F") ?: return
+        _uiState.update { it.copy(fileManagerFiles = LsFParser.parse(output)) }
+    }
+
+    private suspend fun executeFileManagerCommand(command: String): Boolean = executeFileManagerCommandAndGetOutput(command) != null
+
+    private suspend fun executeFileManagerCommandAndGetOutput(command: String): String? {
+        val session = currentFileManagerSession() ?: return null
+        return session.runManagedCommand(command).also {
+            if (it == null) FrpLogBus.append("[file-manager] command failed: $command")
+        }
+    }
+
+    private fun currentFileManagerSession(): ClientSession? {
+        val clientId = _uiState.value.fileManagerClientId ?: return null
+        return TcpServer.getClient(clientId)
+    }
+
     private fun resolveLocalPort(config: String): Int {
         val parsed = FrpManager.parseLocalPort(config)
-        if (parsed == null) {
-            FrpLogBus.append("[config] localPort not found, fallback to $DEFAULT_LOCAL_PORT")
-        } else {
-            FrpLogBus.append("[config] localPort=$parsed")
-        }
+        if (parsed == null) FrpLogBus.append("[config] localPort not found, fallback to $DEFAULT_LOCAL_PORT")
+        else FrpLogBus.append("[config] localPort=$parsed")
         return parsed ?: DEFAULT_LOCAL_PORT
     }
 
     private fun shellEscape(value: String): String = "'${value.replace("'", "'\\''")}'"
 
-    private fun appendPath(base: String, child: String): String {
-        return if (base == "/") "/$child" else "$base/$child"
-    }
+    private fun appendPath(base: String, child: String): String = if (base == "/") "/$child" else "$base/$child"
 
     private fun parentPath(path: String): String {
         if (path == "/") return "/"

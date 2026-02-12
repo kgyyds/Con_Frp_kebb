@@ -63,7 +63,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                     TopAppBar(
                         title = {
                             Text(
-                                if (isSettings) "设置" else if (uiState.fileManagerVisible) "文件管理" else "FRP Shell",
+                                if (isSettings) "设置" else if (uiState.fileEditorVisible) "文件编辑" else if (uiState.fileManagerVisible) "文件管理" else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
                             )
                         },
@@ -72,20 +72,21 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 onClick = {
                                     when {
                                         isSettings -> vm.navigateBackToMain()
+                                        uiState.fileEditorVisible -> vm.closeFileEditor()
                                         uiState.fileManagerVisible -> vm.closeFileManager()
                                         else -> scope.launch { drawerState.open() }
                                     }
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings || uiState.fileManagerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings || uiState.fileManagerVisible) "back" else "open drawer"
+                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible) "back" else "open drawer"
                                 )
                             }
                         },
                         actions = {
                             if (!isSettings) {
-                                if (!uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client) {
+                                if (!uiState.fileManagerVisible && !uiState.fileEditorVisible && uiState.selectedTarget is ShellTarget.Client) {
                                     IconButton(onClick = vm::openFileManager) {
                                         Icon(Icons.Default.Folder, contentDescription = "file manager")
                                     }
@@ -114,6 +115,18 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             onSave = vm::saveConfigOnly,
                             onSaveAndRestart = vm::saveAndRestartFrp,
                             contentPadding = padding
+                        )
+                    }
+
+                    uiState.fileEditorVisible -> {
+                        FileEditorScreen(
+                            remotePath = uiState.fileEditorRemotePath,
+                            content = uiState.fileEditorContent,
+                            fontSizeSp = uiState.shellFontSizeSp,
+                            contentPadding = padding,
+                            onContentChange = vm::onEditorContentChanged,
+                            onSave = vm::saveEditor,
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
 

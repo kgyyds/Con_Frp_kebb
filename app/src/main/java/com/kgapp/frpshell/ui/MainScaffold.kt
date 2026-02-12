@@ -285,6 +285,14 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         Column {
                             Text("请稍候...")
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+                            if (uiState.screenCaptureLog.isNotBlank()) {
+                                Text(
+                                    text = uiState.screenCaptureLog,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 8.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     },
                     confirmButton = {},

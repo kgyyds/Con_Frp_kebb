@@ -23,9 +23,8 @@ android {
     }
 
     signingConfigs {
-        release {
-            // 使用 CI 里解码好的 keystore
-            val keystorePath: String? = System.getenv("GITHUB_WORKSPACE") + "/release.jks"
+        create("release") {
+            val keystorePath = System.getenv("GITHUB_WORKSPACE") + "/release.jks"
             storeFile = file(keystorePath)
             storePassword = System.getenv("SIGNING_STORE_PASSWORD")
             keyAlias = System.getenv("SIGNING_KEY_ALIAS")
@@ -34,15 +33,15 @@ android {
     }
 
     buildTypes {
-        release {
+        getByName("release") {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.release  // 👈 关键
+            signingConfig = signingConfigs.getByName("release") //KotlinDsl写法。
         }
-        debug {
+        getByName("debug") {
             isMinifyEnabled = false
         }
     }

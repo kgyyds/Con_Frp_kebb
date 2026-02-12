@@ -151,6 +151,8 @@ class FrpManager(
             FrpLogBus.append("[frp] no residual frpc process found")
             return
         }
+        FrpLogBus.append("[frp] residual frpc cleanup finished")
+    }
 
         FrpLogBus.append("[frp] residual frpc process found: ${pids.joinToString(",")}")
 

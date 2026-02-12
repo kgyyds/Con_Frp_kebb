@@ -99,6 +99,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         DrawerContent(
                             current = uiState.selectedTarget,
                             clientIds = uiState.clientIds,
+                            clientModels = uiState.clientModels,
                             onSelect = {
                                 vm.onSelectTarget(it)
                                 scope.launch { drawerState.close() }

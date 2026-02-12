@@ -53,7 +53,8 @@ data class MainUiState(
     val screenViewerImagePath: String = "",
     val screenViewerTimestamp: Long = 0L,
     val screenCaptureLoading: Boolean = false,
-    val screenCaptureCancelable: Boolean = false
+    val screenCaptureCancelable: Boolean = false,
+    val clientModels: Map<String, String> = emptyMap()
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -68,7 +69,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
+            val requestedIds = mutableSetOf<String>()
             TcpServer.clientIds.collect { ids ->
+                requestedIds.retainAll(ids.toSet())
+
+                ids.forEach { id ->
+                    if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
+                        requestedIds.add(id)
+                        launch(Dispatchers.IO) {
+                            val session = TcpServer.getClient(id)
+                            val result = session?.runManagedCommand("getprop ro.product.model")
+                            val model = result?.lines()?.firstOrNull()?.trim()
+                            if (!model.isNullOrBlank()) {
+                                _uiState.update { it.copy(clientModels = it.clientModels + (id to model)) }
+                            }
+                        }
+                    }
+                }
+
                 _uiState.update { state ->
                     val safeTarget = if (state.selectedTarget is ShellTarget.Client && state.selectedTarget.id !in ids) {
                         ShellTarget.FrpLog
@@ -77,8 +95,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     val managerAlive = state.fileManagerVisible && state.fileManagerClientId in ids
                     val editorAlive = state.fileEditorVisible && state.fileManagerClientId in ids
+                    
+                    val validModels = state.clientModels.filterKeys { it in ids }
+
                     state.copy(
                         clientIds = ids,
+                        clientModels = validModels,
                         selectedTarget = safeTarget,
                         fileManagerVisible = managerAlive,
                         fileEditorVisible = editorAlive,

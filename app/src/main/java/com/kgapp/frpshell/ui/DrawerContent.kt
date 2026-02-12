@@ -12,6 +12,7 @@ import com.kgapp.frpshell.model.ShellTarget
 fun DrawerContent(
     current: ShellTarget,
     clientIds: List<String>,
+    clientModels: Map<String, String>,
     onSelect: (ShellTarget) -> Unit
 ) {
     Text(text = "会话", modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
@@ -23,8 +24,9 @@ fun DrawerContent(
     )
 
     clientIds.forEach { id ->
+        val displayName = clientModels[id] ?: id
         NavigationDrawerItem(
-            label = { Text(id) },
+            label = { Text(displayName) },
             selected = current is ShellTarget.Client && current.id == id,
             onClick = { onSelect(ShellTarget.Client(id)) }
         )

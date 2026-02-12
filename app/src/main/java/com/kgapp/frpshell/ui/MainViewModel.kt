@@ -31,7 +31,11 @@ data class MainUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val localPort: Int = 23231,
     val shellFontSizeSp: Float = SettingsStore.DEFAULT_FONT_SIZE_SP,
-    val frpRunning: Boolean = false
+    val frpRunning: Boolean = false,
+    val fileManagerVisible: Boolean = false,
+    val fileManagerClientId: String? = null,
+    val fileManagerPath: String = "/",
+    val fileManagerFiles: List<RemoteFileItem> = emptyList()
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -50,7 +54,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         state.selectedTarget
                     }
-                    state.copy(clientIds = ids, selectedTarget = safeTarget)
+                    val fileManagerVisible = state.fileManagerVisible && state.fileManagerClientId in ids
+                    state.copy(
+                        clientIds = ids,
+                        selectedTarget = safeTarget,
+                        fileManagerVisible = fileManagerVisible,
+                        fileManagerClientId = if (fileManagerVisible) state.fileManagerClientId else null
+                    )
                 }
             }
         }
@@ -208,6 +218,109 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun openFileManager() {
+        val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
+
+        _uiState.update {
+            it.copy(
+                fileManagerVisible = true,
+                fileManagerClientId = target.id,
+                fileManagerPath = "/",
+                fileManagerFiles = emptyList()
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            executeFileManagerCommand("cd /")
+            refreshCurrentDirectory()
+        }
+    }
+
+    fun closeFileManager() {
+        _uiState.update {
+            it.copy(
+                fileManagerVisible = false,
+                fileManagerClientId = null,
+                fileManagerPath = "/",
+                fileManagerFiles = emptyList()
+            )
+        }
+    }
+
+    fun fileManagerRefresh() {
+        viewModelScope.launch(Dispatchers.IO) {
+            refreshCurrentDirectory()
+        }
+    }
+
+    fun fileManagerOpen(item: RemoteFileItem) {
+        if (item.type != RemoteFileType.Directory) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val escaped = shellEscape(item.name)
+            val ok = executeFileManagerCommand("cd $escaped")
+            if (ok) {
+                _uiState.update { state ->
+                    state.copy(fileManagerPath = appendPath(state.fileManagerPath, item.name))
+                }
+                refreshCurrentDirectory()
+            }
+        }
+    }
+
+    fun fileManagerBackDirectory() {
+        val state = _uiState.value
+        if (state.fileManagerPath == "/") return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = executeFileManagerCommand("cd ..")
+            if (ok) {
+                _uiState.update { it.copy(fileManagerPath = parentPath(it.fileManagerPath)) }
+                refreshCurrentDirectory()
+            }
+        }
+    }
+
+    fun fileManagerRename(item: RemoteFileItem, newName: String) {
+        if (newName.isBlank()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            executeFileManagerCommand("mv ${shellEscape(item.name)} ${shellEscape(newName)}")
+            refreshCurrentDirectory()
+        }
+    }
+
+    fun fileManagerChmod(item: RemoteFileItem, mode: String) {
+        if (!mode.matches(Regex("\\d{3,4}"))) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            executeFileManagerCommand("chmod $mode ${shellEscape(item.name)}")
+            refreshCurrentDirectory()
+        }
+    }
+
+    private suspend fun refreshCurrentDirectory() {
+        val output = executeFileManagerCommandAndGetOutput("ls -F") ?: return
+        val parsed = LsFParser.parse(output)
+        _uiState.update { it.copy(fileManagerFiles = parsed) }
+    }
+
+    private suspend fun executeFileManagerCommand(command: String): Boolean {
+        return executeFileManagerCommandAndGetOutput(command) != null
+    }
+
+    private suspend fun executeFileManagerCommandAndGetOutput(command: String): String? {
+        val state = _uiState.value
+        val clientId = state.fileManagerClientId ?: return null
+        val session = TcpServer.getClient(clientId) ?: return null
+
+        return session.runManagedCommand(command).also {
+            if (it == null) {
+                FrpLogBus.append("[file-manager] command failed: $command")
+            }
+        }
+    }
+
     private fun resolveLocalPort(config: String): Int {
         val parsed = FrpManager.parseLocalPort(config)
         if (parsed == null) {
@@ -216,6 +329,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             FrpLogBus.append("[config] localPort=$parsed")
         }
         return parsed ?: DEFAULT_LOCAL_PORT
+    }
+
+    private fun shellEscape(value: String): String = "'${value.replace("'", "'\\''")}'"
+
+    private fun appendPath(base: String, child: String): String {
+        return if (base == "/") "/$child" else "$base/$child"
+    }
+
+    private fun parentPath(path: String): String {
+        if (path == "/") return "/"
+        val trimmed = path.trimEnd('/')
+        val idx = trimmed.lastIndexOf('/')
+        return if (idx <= 0) "/" else trimmed.substring(0, idx)
     }
 
     override fun onCleared() {

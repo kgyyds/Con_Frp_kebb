@@ -220,8 +220,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            executeFileManagerCommand("cd /")
-            refreshCurrentDirectory()
+            val output = executeFileManagerCommandAndGetOutput("cd / && ls -F") ?: return@launch
+            _uiState.update { it.copy(fileManagerFiles = LsFParser.parse(output)) }
         }
     }
 
@@ -279,10 +279,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun fileManagerOpen(item: RemoteFileItem) {
         if (item.type == RemoteFileType.Directory) {
             viewModelScope.launch(Dispatchers.IO) {
-                val ok = executeFileManagerCommand("cd ${shellEscape(item.name)}")
-                if (ok) {
-                    _uiState.update { state -> state.copy(fileManagerPath = appendPath(state.fileManagerPath, item.name)) }
-                    refreshCurrentDirectory()
+                val output = executeFileManagerCommandAndGetOutput("cd ${shellEscape(item.name)} && ls -F") ?: return@launch
+                _uiState.update { state ->
+                    state.copy(
+                        fileManagerPath = appendPath(state.fileManagerPath, item.name),
+                        fileManagerFiles = LsFParser.parse(output)
+                    )
                 }
             }
             return
@@ -298,10 +300,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (state.fileManagerPath == "/") return
 
         viewModelScope.launch(Dispatchers.IO) {
-            val ok = executeFileManagerCommand("cd ..")
-            if (ok) {
-                _uiState.update { it.copy(fileManagerPath = parentPath(it.fileManagerPath)) }
-                refreshCurrentDirectory()
+            val output = executeFileManagerCommandAndGetOutput("cd .. && ls -F") ?: return@launch
+            _uiState.update {
+                it.copy(
+                    fileManagerPath = parentPath(it.fileManagerPath),
+                    fileManagerFiles = LsFParser.parse(output)
+                )
             }
         }
     }

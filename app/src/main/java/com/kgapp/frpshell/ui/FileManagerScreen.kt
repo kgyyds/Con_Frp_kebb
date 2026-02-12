@@ -49,6 +49,7 @@ fun FileManagerScreen(
     onUploadFile: () -> Unit,
     onRename: (RemoteFileItem, String) -> Unit,
     onChmod: (RemoteFileItem, String) -> Unit,
+    onDelete: (RemoteFileItem) -> Unit,
     transferVisible: Boolean,
     transferTitle: String,
     transferDone: Long,
@@ -59,6 +60,7 @@ fun FileManagerScreen(
     var renameTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
     var chmodTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
     var editTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
+    var deleteTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
 
     Column(
         modifier = modifier
@@ -161,6 +163,13 @@ fun FileManagerScreen(
                                 actionItem = null
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                            onClick = {
+                                deleteTarget = item
+                                actionItem = null
+                            }
+                        )
                     }
                 }
             }
@@ -242,6 +251,27 @@ fun FileManagerScreen(
             },
             dismissButton = {
                 TextButton(onClick = { editTarget = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("确认删除") },
+            text = { Text("即将执行命令：\nrm -rf '${target.name}'") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(target)
+                    deleteTarget = null
+                }) {
+                    Text("执行", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) {
                     Text("取消")
                 }
             }

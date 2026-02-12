@@ -214,6 +214,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             onUploadFile = { uploadLauncher.launch("*/*") },
                             onRename = vm::fileManagerRename,
                             onChmod = vm::fileManagerChmod,
+                            onDelete = vm::fileManagerDelete,
                             transferVisible = uiState.fileTransferVisible,
                             transferTitle = uiState.fileTransferTitle,
                             transferDone = uiState.fileTransferDone,

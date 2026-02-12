@@ -446,6 +446,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun fileManagerDelete(item: RemoteFileItem) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val command = "rm -rf ${shellEscape(item.name)}"
+            executeFileManagerCommand(command)
+            refreshCurrentDirectory()
+        }
+    }
+
 
     fun fileManagerEdit(item: RemoteFileItem) {
         if (item.type == RemoteFileType.Directory) return

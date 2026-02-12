@@ -41,6 +41,9 @@ import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.ui.theme.FrpShellTheme
 import kotlinx.coroutines.launch
 
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScaffold(vm: MainViewModel = viewModel()) {
@@ -265,6 +268,27 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         }
                     },
                     confirmButton = {}
+                )
+            }
+
+            if (uiState.screenCaptureLoading) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("正在截屏...") },
+                    text = {
+                        Column {
+                            Text("请稍候，正在获取远程屏幕截图。")
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        if (uiState.screenCaptureCancelable) {
+                            TextButton(onClick = vm::cancelScreenCapture) {
+                                Text("取消")
+                            }
+                        }
+                    }
                 )
             }
         }

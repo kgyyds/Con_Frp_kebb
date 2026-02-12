@@ -492,9 +492,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(screenCaptureLoadingText = "正在执行拍照指令...") }  
             updateLog("发送拍照指令 (camera_id=$cameraId)...")  
 
-            val cmd = "CLASSPATH=/data/local/tmp/scrcpy-server.jar " +
-                      "app_process /data/local/tmp com.genymobile.scrcpy.Server " +
-                      "video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1 &"
+            
+                      
+                      
+            val cmd = "nohup sh -c \"(CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1)\" &"
 
             // Fire and forget
             session.runManagedCommand(cmd)  

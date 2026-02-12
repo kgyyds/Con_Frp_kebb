@@ -7,6 +7,7 @@ import com.kgapp.frpshell.frp.FrpLogBus
 import com.kgapp.frpshell.frp.FrpManager
 import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.server.TcpServer
+import com.kgapp.frpshell.ui.theme.ThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,7 +27,8 @@ data class MainUiState(
     val configContent: String = "",
     val firstLaunchFlow: Boolean = false,
     val suAvailable: Boolean = false,
-    val useSu: Boolean = false
+    val useSu: Boolean = false,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -55,8 +57,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val initialized = settingsStore.isInitialized()
             val suAvailable = FrpManager.detectSuAvailable()
             val useSuDefault = if (initialized) settingsStore.getUseSu() else suAvailable
+            val themeMode = settingsStore.getThemeMode()
             if (!initialized) {
                 settingsStore.setUseSu(useSuDefault)
+                settingsStore.setThemeMode(ThemeMode.SYSTEM)
                 settingsStore.setInitialized(true)
             }
 
@@ -69,7 +73,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     firstLaunchFlow = !configExists,
                     configContent = content,
                     suAvailable = suAvailable,
-                    useSu = useSuDefault
+                    useSu = useSuDefault,
+                    themeMode = themeMode
                 )
             }
 
@@ -94,6 +99,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(useSu = enabled) }
     }
 
+    fun onThemeModeChanged(mode: ThemeMode) {
+        _uiState.update { it.copy(themeMode = mode) }
+    }
+
     fun openSettings() {
         _uiState.update { it.copy(screen = ScreenDestination.Settings, firstLaunchFlow = false) }
     }
@@ -108,14 +117,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         frpManager.saveConfig(state.configContent)
         settingsStore.setUseSu(state.useSu)
+        settingsStore.setThemeMode(state.themeMode)
         _uiState.update { it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main) }
-        FrpLogBus.append("[settings] saved (useSu=${state.useSu})")
+        FrpLogBus.append("[settings] saved (useSu=${state.useSu}, theme=${state.themeMode})")
     }
 
     fun saveAndRestartFrp() {
         val state = _uiState.value
         frpManager.saveConfig(state.configContent)
         settingsStore.setUseSu(state.useSu)
+        settingsStore.setThemeMode(state.themeMode)
         _uiState.update { it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main) }
 
         viewModelScope.launch {

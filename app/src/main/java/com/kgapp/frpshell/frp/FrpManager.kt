@@ -119,28 +119,6 @@ class FrpManager(
                 ProcessBuilder("su", "-c", "echo frpshell").start().waitFor() == 0
             }.getOrDefault(false)
         }
-        frpcBinary.setExecutable(true)
-    }
-
-    suspend fun stop() {
-        process?.destroy()
-        process = null
-        stdoutJob?.cancelAndJoin()
-        stderrJob?.cancelAndJoin()
-        stdoutJob = null
-        stderrJob = null
-        FrpLogBus.append("[frp] stopped")
-    }
-
-    private fun ensureFrpcBinaryReady(): Boolean {
-        if (!frpcBinary.exists()) {
-            context.assets.open("frpc").use { input ->
-                frpcBinary.outputStream().use { out ->
-                    input.copyTo(out)
-                }
-            }
-            permissionPrepared = false
-        }
 
         if (!permissionPrepared || !frpcBinary.canExecute()) {
             val chmodResult = runCatching {

@@ -6,7 +6,5 @@ import com.kgapp.frpshell.ui.theme.FrpShellTheme
 
 @Composable
 fun App() {
-    FrpShellTheme {
-        MainScaffold()
-    }
+    MainScaffold()
 }

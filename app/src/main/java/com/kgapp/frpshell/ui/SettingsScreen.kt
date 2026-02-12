@@ -7,25 +7,29 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.kgapp.frpshell.ui.theme.ThemeMode
 
 @Composable
 fun SettingsScreen(
     configContent: String,
     useSu: Boolean,
     suAvailable: Boolean,
+    themeMode: ThemeMode,
     firstLaunchFlow: Boolean,
     onConfigChanged: (String) -> Unit,
     onUseSuChanged: (Boolean) -> Unit,
+    onThemeModeChanged: (ThemeMode) -> Unit,
     onSave: () -> Unit,
     onSaveAndRestart: () -> Unit,
     modifier: Modifier = Modifier,
@@ -59,6 +63,26 @@ fun SettingsScreen(
                 checked = useSu,
                 onCheckedChange = onUseSuChanged
             )
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("主题", style = MaterialTheme.typography.titleSmall)
+            ThemeMode.entries.forEach { mode ->
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    RadioButton(
+                        selected = themeMode == mode,
+                        onClick = { onThemeModeChanged(mode) }
+                    )
+                    Text(
+                        text = when (mode) {
+                            ThemeMode.SYSTEM -> "跟随系统"
+                            ThemeMode.LIGHT -> "浅色"
+                            ThemeMode.DARK -> "深色"
+                        },
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                }
+            }
         }
 
         OutlinedTextField(

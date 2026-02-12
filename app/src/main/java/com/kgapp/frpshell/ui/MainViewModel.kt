@@ -28,7 +28,8 @@ data class MainUiState(
     val firstLaunchFlow: Boolean = false,
     val suAvailable: Boolean = false,
     val useSu: Boolean = false,
-    val themeMode: ThemeMode = ThemeMode.SYSTEM
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val localPort: Int = 23231
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -39,7 +40,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     init {
-        TcpServer.start()
         viewModelScope.launch {
             TcpServer.clientIds.collect { ids ->
                 _uiState.update { state ->
@@ -66,6 +66,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val configExists = frpManager.configExists()
             val content = if (configExists) frpManager.readConfig() else DEFAULT_CONFIG_TEMPLATE
+            val localPort = resolveLocalPort(content)
 
             _uiState.update {
                 it.copy(
@@ -74,9 +75,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     configContent = content,
                     suAvailable = suAvailable,
                     useSu = useSuDefault,
-                    themeMode = themeMode
+                    themeMode = themeMode,
+                    localPort = localPort
                 )
             }
+
+            TcpServer.start(localPort)
 
             if (configExists) {
                 if (useSuDefault && !suAvailable) {
@@ -118,8 +122,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         frpManager.saveConfig(state.configContent)
         settingsStore.setUseSu(state.useSu)
         settingsStore.setThemeMode(state.themeMode)
-        _uiState.update { it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main) }
-        FrpLogBus.append("[settings] saved (useSu=${state.useSu}, theme=${state.themeMode})")
+
+        val localPort = resolveLocalPort(state.configContent)
+        TcpServer.start(localPort)
+
+        _uiState.update {
+            it.copy(
+                firstLaunchFlow = false,
+                screen = ScreenDestination.Main,
+                localPort = localPort,
+                selectedTarget = ShellTarget.FrpLog
+            )
+        }
+        FrpLogBus.append("[settings] saved (useSu=${state.useSu}, theme=${state.themeMode}, localPort=$localPort)")
     }
 
     fun saveAndRestartFrp() {
@@ -127,7 +142,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         frpManager.saveConfig(state.configContent)
         settingsStore.setUseSu(state.useSu)
         settingsStore.setThemeMode(state.themeMode)
-        _uiState.update { it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main) }
+
+        val localPort = resolveLocalPort(state.configContent)
+        TcpServer.start(localPort)
+
+        _uiState.update {
+            it.copy(
+                firstLaunchFlow = false,
+                screen = ScreenDestination.Main,
+                localPort = localPort,
+                selectedTarget = ShellTarget.FrpLog
+            )
+        }
 
         viewModelScope.launch {
             if (state.useSu && !state.suAvailable) {
@@ -144,7 +170,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun resolveLocalPort(config: String): Int {
+        val parsed = FrpManager.parseLocalPort(config)
+        if (parsed == null) {
+            FrpLogBus.append("[config] localPort not found, fallback to $DEFAULT_LOCAL_PORT")
+        } else {
+            FrpLogBus.append("[config] localPort=$parsed")
+        }
+        return parsed ?: DEFAULT_LOCAL_PORT
+    }
+    override fun onCleared() {
+        super.onCleared()
+        TcpServer.stopAll()
+    }
+
+
     companion object {
+        private const val DEFAULT_LOCAL_PORT = 23231
+
         private const val DEFAULT_CONFIG_TEMPLATE = """
 serverAddr = "your.server.com"
 serverPort = 7000

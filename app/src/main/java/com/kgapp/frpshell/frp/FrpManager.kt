@@ -45,6 +45,10 @@ class FrpManager(
             return
         }
 
+        if (useSu) {
+            cleanupResidualFrpcWithSu()
+        }
+
         val command = if (useSu) {
             val suCmd = "${shellEscape(frpcBinary.absolutePath)} -c ${shellEscape(configFile.absolutePath)}"
             listOf("su", "-c", suCmd)
@@ -90,25 +94,66 @@ class FrpManager(
             permissionPrepared = false
         }
 
-        if (!permissionPrepared || !frpcBinary.canExecute()) {
-            val chmodResult = runCatching {
-                ProcessBuilder("chmod", "777", frpcBinary.absolutePath)
-                    .start()
-                    .waitFor()
-            }.getOrElse { -1 }
+        // 每次启动前都确保 chmod 777
+        val chmodResult = runCatching {
+            ProcessBuilder("chmod", "777", frpcBinary.absolutePath)
+                .start()
+                .waitFor()
+        }.getOrElse { -1 }
 
-            if (chmodResult != 0 && !frpcBinary.setExecutable(true, false)) {
-                return false
-            }
-            permissionPrepared = true
+        if ((chmodResult != 0 || !frpcBinary.canExecute()) && !frpcBinary.setExecutable(true, false)) {
+            return false
+        }
+        permissionPrepared = true
+
+        return permissionPrepared && frpcBinary.canExecute()
+    }
+
+    private fun cleanupResidualFrpcWithSu() {
+        val pidOutput = runCommandWithOutput(
+            listOf("su", "-c", "pidof frpc 2>/dev/null || pgrep -f '/frpc( |$)' 2>/dev/null")
+        )
+        val pids = pidOutput
+            .split(Regex("\\s+"))
+            .map { it.trim() }
+            .filter { it.matches(Regex("\\d+")) }
+
+        if (pids.isEmpty()) {
+            FrpLogBus.append("[frp] no residual frpc process found")
+            return
         }
 
-        return frpcBinary.canExecute()
+        FrpLogBus.append("[frp] residual frpc process found: ${pids.joinToString(",")}")
+
+        val killResult = runCatching {
+            ProcessBuilder("su", "-c", "kill ${pids.joinToString(" ")}").start().waitFor()
+        }.getOrElse { -1 }
+        if (killResult != 0) {
+            ProcessBuilder("su", "-c", "kill -9 ${pids.joinToString(" ")}").start().waitFor()
+        }
+        FrpLogBus.append("[frp] residual frpc cleanup finished")
+    }
+
+    private fun runCommandWithOutput(command: List<String>): String {
+        return runCatching {
+            val process = ProcessBuilder(command).start()
+            val output = process.inputStream.bufferedReader().readText().trim()
+            process.waitFor()
+            output
+        }.getOrDefault("")
     }
 
     private fun shellEscape(value: String): String = "'${value.replace("'", "'\\''")}'"
 
     companion object {
+        private val localPortRegex = Regex("""(?m)^\s*localPort\s*=\s*(\d+)\s*(?:#.*)?$""")
+
+        fun parseLocalPort(configContent: String): Int? {
+            val match = localPortRegex.find(configContent) ?: return null
+            val parsed = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return null
+            return parsed.takeIf { it in 1..65535 }
+        }
+
         fun detectSuAvailable(): Boolean {
             val whichOk = runCatching {
                 ProcessBuilder("sh", "-c", "which su").start().waitFor() == 0

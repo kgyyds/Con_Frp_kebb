@@ -19,6 +19,7 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -84,62 +85,90 @@ class ClientSession(
         }
     }
 
-    suspend fun uploadFile(remotePath: String, localFile: File): Boolean {
+    suspend fun uploadFile(remotePath: String, localFile: File, onProgress: ((Long, Long) -> Unit)? = null): Boolean {
         val safeRemotePath = sanitizeRemotePath(remotePath) ?: return false
         if (!localFile.exists() || !localFile.isFile) return false
 
         return transferMutex.withLock {
-            val size = localFile.length()
-            val out = socket.getOutputStream()
+            val total = localFile.length()
+            onProgress?.invoke(0L, total)
 
-            sendMutex.withLock {
-                out.write("upload $safeRemotePath\n".toByteArray(StandardCharsets.UTF_8))
-                out.write(longToBigEndian(size))
-                out.write(LINE_FEED.toInt())
-                localFile.inputStream().use { input ->
-                    val buffer = ByteArray(FILE_CHUNK_SIZE)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read <= 0) break
-                        out.write(buffer, 0, read)
-                    }
+            val escapedPath = shellEscape(safeRemotePath)
+            val truncateResult = runManagedCommand(": > '$escapedPath'", timeoutMs = DEFAULT_MANAGED_TIMEOUT_MS)
+            if (truncateResult == null) return@withLock false
+
+            var sent = 0L
+            val buffer = ByteArray(UPLOAD_RAW_CHUNK_SIZE)
+            localFile.inputStream().use { input ->
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    val encoded = Base64.getEncoder().encodeToString(buffer.copyOf(read))
+                    val ok = runManagedCommand("printf '%s' '$encoded' | base64 -d >> '$escapedPath'", timeoutMs = TRANSFER_TIMEOUT_MS)
+                    if (ok == null) return@withLock false
+                    sent += read
+                    onProgress?.invoke(sent, total)
                 }
-                out.flush()
             }
-            true
+
+            val verify = runManagedCommand("wc -c < '$escapedPath'", timeoutMs = DEFAULT_MANAGED_TIMEOUT_MS)
+                ?.lineSequence()
+                ?.map { it.trim() }
+                ?.firstOrNull { it.isNotBlank() }
+                ?.toLongOrNull()
+
+            verify == total
         }
     }
 
-    suspend fun downloadFile(remotePath: String, targetFile: File): DownloadResult {
+    suspend fun downloadFile(remotePath: String, targetFile: File, onProgress: ((Long, Long) -> Unit)? = null): DownloadResult {
         val safeRemotePath = sanitizeRemotePath(remotePath) ?: return DownloadResult.Failed
         return transferMutex.withLock {
-            val deferred = CompletableDeferred<DownloadResult>()
+            val escapedPath = shellEscape(safeRemotePath)
+            val sizeOutput = runManagedCommand("if [ -f '$escapedPath' ]; then wc -c < '$escapedPath'; else echo -1; fi")
+                ?: return@withLock DownloadResult.Failed
+            val total = sizeOutput.lineSequence().map { it.trim() }.firstOrNull { it.isNotBlank() }?.toLongOrNull()
+                ?: return@withLock DownloadResult.Failed
+            if (total < 0) return@withLock DownloadResult.NotFound
+            if (total == 0L) {
+                targetFile.parentFile?.mkdirs()
+                runCatching { targetFile.writeBytes(byteArrayOf()) }
+                onProgress?.invoke(0L, 0L)
+                return@withLock DownloadResult.Success
+            }
+
+            onProgress?.invoke(0L, total)
             val tmpFile = File(targetFile.parentFile ?: File("."), "${targetFile.name}.part")
-            var prepared = false
+            tmpFile.parentFile?.mkdirs()
 
-            transferStateMutex.withLock {
-                if (uploadContext == null && uploadReceiveState == UploadReceiveState.Idle) {
-                    uploadContext = UploadContext(
-                        targetFile = targetFile,
-                        tmpFile = tmpFile,
-                        result = deferred
-                    )
-                    uploadReceiveState = UploadReceiveState.WaitUploadHeader
-                    prepared = true
+            runCatching {
+                FileOutputStream(tmpFile, false).use { output ->
+                    var offset = 0L
+                    while (offset < total) {
+                        val count = minOf(DOWNLOAD_RAW_CHUNK_SIZE.toLong(), total - offset)
+                        val cmd = "dd if='$escapedPath' bs=1 skip=$offset count=$count 2>/dev/null | base64"
+                        val rawBase64 = runManagedCommand(cmd, timeoutMs = TRANSFER_TIMEOUT_MS) ?: return@withLock DownloadResult.Failed
+                        val compact = rawBase64.filterNot { it == '\r' || it == '\n' || it == ' ' || it == '\t' }
+                        val chunk = runCatching { Base64.getDecoder().decode(compact) }.getOrNull()
+                            ?: return@withLock DownloadResult.Failed
+                        if (chunk.isEmpty()) return@withLock DownloadResult.Failed
+                        output.write(chunk)
+                        offset += chunk.size
+                        onProgress?.invoke(offset.coerceAtMost(total), total)
+                    }
+                    output.flush()
                 }
+            }.getOrElse {
+                runCatching { tmpFile.delete() }
+                return@withLock DownloadResult.Failed
             }
 
-            if (!prepared) return@withLock DownloadResult.Failed
-
-            sendMutex.withLock {
-                socket.getOutputStream().write("download $safeRemotePath\n".toByteArray(StandardCharsets.UTF_8))
-                socket.getOutputStream().flush()
+            if (!tmpFile.renameTo(targetFile)) {
+                runCatching { tmpFile.delete() }
+                return@withLock DownloadResult.Failed
             }
 
-            withTimeoutOrNull(TRANSFER_TIMEOUT_MS) { deferred.await() } ?: run {
-                resetUploadState("transfer timeout", cleanupFile = true)
-                DownloadResult.Failed
-            }
+            DownloadResult.Success
         }
     }
 
@@ -255,6 +284,8 @@ class ClientSession(
         return path
     }
 
+    private fun shellEscape(value: String): String = value.replace("'", "'\\''")
+
     private fun longToBigEndian(value: Long): ByteArray {
         val buffer = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
         buffer.putLong(value)
@@ -282,6 +313,8 @@ class ClientSession(
     companion object {
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
         private const val FILE_CHUNK_SIZE = 4096
+        private const val UPLOAD_RAW_CHUNK_SIZE = 2048
+        private const val DOWNLOAD_RAW_CHUNK_SIZE = 3072
         private const val MAX_LINE = 1024
         private const val MAX_REMOTE_PATH = 4096
         private const val LINE_FEED: Byte = 0x0A

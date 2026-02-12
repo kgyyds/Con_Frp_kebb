@@ -44,7 +44,11 @@ data class MainUiState(
     val fileEditorCachePath: String = "",
     val fileEditorOriginalContent: String = "",
     val fileEditorContent: String = "",
-    val fileEditorConfirmDiscardVisible: Boolean = false
+    val fileEditorConfirmDiscardVisible: Boolean = false,
+    val fileTransferVisible: Boolean = false,
+    val fileTransferTitle: String = "",
+    val fileTransferDone: Long = 0L,
+    val fileTransferTotal: Long = 0L
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -239,7 +243,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 fileEditorCachePath = "",
                 fileEditorOriginalContent = "",
                 fileEditorContent = "",
-                fileEditorConfirmDiscardVisible = false
+                fileEditorConfirmDiscardVisible = false,
+                fileTransferVisible = false,
+                fileTransferTitle = "",
+                fileTransferDone = 0L,
+                fileTransferTotal = 0L
             )
         }
     }
@@ -278,7 +286,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) {
             val session = currentFileManagerSession() ?: return@launch
-            val ok = session.uploadFile(state.fileEditorRemotePath, cacheFile)
+            beginTransfer("上传中：${state.fileEditorRemotePath}")
+            val ok = session.uploadFile(state.fileEditorRemotePath, cacheFile) { done, total ->
+                reportTransfer(done, total)
+            }
+            endTransfer()
             if (ok) {
                 _uiState.update { it.copy(fileEditorOriginalContent = it.fileEditorContent, fileEditorConfirmDiscardVisible = false) }
                 FrpLogBus.append("[editor] upload success: ${state.fileEditorRemotePath}")
@@ -366,7 +378,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val remotePath = appendPath(_uiState.value.fileManagerPath, cleanName)
             val session = currentFileManagerSession() ?: return@launch
-            val ok = session.uploadFile(remotePath, localFile)
+            beginTransfer("上传中：$remotePath")
+            val ok = session.uploadFile(remotePath, localFile) { done, total ->
+                reportTransfer(done, total)
+            }
+            endTransfer()
             if (ok) {
                 FrpLogBus.append("[file-manager] upload success: $remotePath")
                 refreshCurrentDirectory()
@@ -382,10 +398,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val cacheFile = File(getApplication<Application>().cacheDir, "download_${state.fileManagerClientId}_${item.name}")
         val session = currentFileManagerSession() ?: return
 
-        when (session.downloadFile(remotePath, cacheFile)) {
+        beginTransfer("下载中：$remotePath")
+        when (session.downloadFile(remotePath, cacheFile) { done, total ->
+            reportTransfer(done, total)
+        }) {
             ClientSession.DownloadResult.Success -> FrpLogBus.append("[file-manager] download success: $remotePath -> ${cacheFile.absolutePath}")
             ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[file-manager] remote file not found: $remotePath")
             ClientSession.DownloadResult.Failed -> FrpLogBus.append("[file-manager] download failed: $remotePath")
+        }
+        endTransfer()
+    }
+
+    fun fileManagerDownload(item: RemoteFileItem) {
+        if (item.type == RemoteFileType.Directory) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val state = _uiState.value
+            val remotePath = appendPath(state.fileManagerPath, item.name)
+            val outputDir = getApplication<Application>().getExternalFilesDir("downloads")
+                ?: getApplication<Application>().cacheDir
+            val localFile = File(outputDir, item.name)
+            val session = currentFileManagerSession() ?: return@launch
+
+            beginTransfer("下载中：$remotePath")
+            when (session.downloadFile(remotePath, localFile) { done, total ->
+                reportTransfer(done, total)
+            }) {
+                ClientSession.DownloadResult.Success -> FrpLogBus.append("[file-manager] download success: $remotePath -> ${localFile.absolutePath}")
+                ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[file-manager] remote file not found: $remotePath")
+                ClientSession.DownloadResult.Failed -> FrpLogBus.append("[file-manager] download failed: $remotePath")
+            }
+            endTransfer()
         }
     }
 
@@ -395,7 +437,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val cacheFile = File(getApplication<Application>().cacheDir, "editor_${state.fileManagerClientId}_${item.name}.tmp")
         val session = currentFileManagerSession() ?: return
 
-        when (session.downloadFile(remotePath, cacheFile)) {
+        beginTransfer("下载中：$remotePath")
+        when (session.downloadFile(remotePath, cacheFile) { done, total ->
+            reportTransfer(done, total)
+        }) {
             ClientSession.DownloadResult.Success -> {
                 val content = runCatching { cacheFile.readText() }.getOrElse { "" }
                 _uiState.update {
@@ -419,6 +464,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 FrpLogBus.append("[editor] download failed: $remotePath")
             }
         }
+        endTransfer()
+    }
+
+    private fun beginTransfer(title: String) {
+        _uiState.update { it.copy(fileTransferVisible = true, fileTransferTitle = title, fileTransferDone = 0L, fileTransferTotal = 0L) }
+    }
+
+    private fun reportTransfer(done: Long, total: Long) {
+        _uiState.update { it.copy(fileTransferDone = done, fileTransferTotal = total) }
+    }
+
+    private fun endTransfer() {
+        _uiState.update { it.copy(fileTransferVisible = false) }
     }
 
     private suspend fun refreshCurrentDirectory() {

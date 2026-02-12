@@ -183,9 +183,14 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             onBackDirectory = vm::fileManagerBackDirectory,
                             onOpenFile = vm::fileManagerOpen,
                             onEditFile = vm::fileManagerEdit,
+                            onDownloadFile = vm::fileManagerDownload,
                             onUploadFile = { uploadLauncher.launch("*/*") },
                             onRename = vm::fileManagerRename,
                             onChmod = vm::fileManagerChmod,
+                            transferVisible = uiState.fileTransferVisible,
+                            transferTitle = uiState.fileTransferTitle,
+                            transferDone = uiState.fileTransferDone,
+                            transferTotal = uiState.fileTransferTotal,
                             modifier = Modifier.fillMaxSize()
                         )
                     }

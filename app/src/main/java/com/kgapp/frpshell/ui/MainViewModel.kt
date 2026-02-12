@@ -23,6 +23,7 @@ enum class ScreenDestination {
     Settings
 }
 
+
 data class MainUiState(
     val selectedTarget: ShellTarget = ShellTarget.FrpLog,
     val clientIds: List<String> = emptyList(),

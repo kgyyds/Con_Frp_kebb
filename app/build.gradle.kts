@@ -14,11 +14,22 @@ android {
         minSdk = 26
         targetSdk = 34
 
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 200
+        versionName = "2.0.0"
 
         ndk {
             abiFilters += "arm64-v8a"
+        }
+    }
+
+    signingConfigs {
+        release {
+            // 使用 CI 里解码好的 keystore
+            val keystorePath: String? = System.getenv("GITHUB_WORKSPACE") + "/release.jks"
+            storeFile = file(keystorePath)
+            storePassword = System.getenv("SIGNING_STORE_PASSWORD")
+            keyAlias = System.getenv("SIGNING_KEY_ALIAS")
+            keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
         }
     }
 
@@ -29,6 +40,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.release  // 👈 关键
         }
         debug {
             isMinifyEnabled = false

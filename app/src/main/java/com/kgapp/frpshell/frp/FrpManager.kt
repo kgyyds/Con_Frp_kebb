@@ -5,6 +5,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -18,9 +21,13 @@ class FrpManager(
     private var process: Process? = null
     private var stdoutJob: Job? = null
     private var stderrJob: Job? = null
+    private var monitorJob: Job? = null
 
     @Volatile
     private var permissionPrepared = false
+
+    private val _running = MutableStateFlow(false)
+    val running: StateFlow<Boolean> = _running.asStateFlow()
 
     fun configExists(): Boolean = configFile.exists()
 
@@ -36,6 +43,10 @@ class FrpManager(
     }
 
     fun start(useSu: Boolean) {
+        if (_running.value) {
+            FrpLogBus.append("[frp] already running")
+            return
+        }
         if (!configExists()) {
             FrpLogBus.append("[frp] frpc.toml not found")
             return
@@ -59,28 +70,47 @@ class FrpManager(
         runCatching {
             val started = ProcessBuilder(command).start()
             process = started
+            _running.value = true
             FrpLogBus.append("[frp] started (useSu=$useSu)")
 
             stdoutJob?.cancel()
             stderrJob?.cancel()
+            monitorJob?.cancel()
+
             stdoutJob = scope.launch(Dispatchers.IO) {
                 started.inputStream.bufferedReader().forEachLine { FrpLogBus.append(it) }
             }
             stderrJob = scope.launch(Dispatchers.IO) {
                 started.errorStream.bufferedReader().forEachLine { FrpLogBus.append("[err] $it") }
             }
+            monitorJob = scope.launch(Dispatchers.IO) {
+                val code = runCatching { started.waitFor() }.getOrDefault(-1)
+                _running.value = false
+                if (process == started) {
+                    process = null
+                }
+                FrpLogBus.append("[frp] exited with code $code")
+            }
         }.onFailure {
+            _running.value = false
             FrpLogBus.append("[frp] failed (useSu=$useSu): ${it.message ?: "unknown"}")
         }
     }
 
     suspend fun stop() {
+        if (!_running.value && process == null) {
+            FrpLogBus.append("[frp] already stopped")
+            return
+        }
         process?.destroy()
         process = null
         stdoutJob?.cancelAndJoin()
         stderrJob?.cancelAndJoin()
+        monitorJob?.cancelAndJoin()
         stdoutJob = null
         stderrJob = null
+        monitorJob = null
+        _running.value = false
         FrpLogBus.append("[frp] stopped")
     }
 
@@ -94,7 +124,6 @@ class FrpManager(
             permissionPrepared = false
         }
 
-        // 每次启动前都确保 chmod 777
         val chmodResult = runCatching {
             ProcessBuilder("chmod", "777", frpcBinary.absolutePath)
                 .start()
@@ -122,6 +151,8 @@ class FrpManager(
             FrpLogBus.append("[frp] no residual frpc process found")
             return
         }
+        FrpLogBus.append("[frp] residual frpc cleanup finished")
+    }
 
         FrpLogBus.append("[frp] residual frpc process found: ${pids.joinToString(",")}")
 
@@ -136,9 +167,9 @@ class FrpManager(
 
     private fun runCommandWithOutput(command: List<String>): String {
         return runCatching {
-            val process = ProcessBuilder(command).start()
-            val output = process.inputStream.bufferedReader().readText().trim()
-            process.waitFor()
+            val proc = ProcessBuilder(command).start()
+            val output = proc.inputStream.bufferedReader().readText().trim()
+            proc.waitFor()
             output
         }.getOrDefault("")
     }

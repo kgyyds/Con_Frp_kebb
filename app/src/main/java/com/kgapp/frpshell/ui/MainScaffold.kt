@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.TextButton
@@ -129,8 +130,12 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             }
                         },
                         actions = {
-                            if (!isSettings) {
-                                if (!uiState.fileManagerVisible && !uiState.fileEditorVisible && uiState.selectedTarget is ShellTarget.Client) {
+                            if (uiState.fileEditorVisible) {
+                                IconButton(onClick = vm::saveEditor) {
+                                    Icon(Icons.Default.Save, contentDescription = "save")
+                                }
+                            } else if (!isSettings) {
+                                if (!uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client) {
                                     IconButton(onClick = vm::openFileManager) {
                                         Icon(Icons.Default.Folder, contentDescription = "file manager")
                                     }

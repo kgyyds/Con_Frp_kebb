@@ -44,10 +44,10 @@ class ClientSession(
     private var activeCapture: CaptureState? = null
 
     @Volatile
-    private var uploadReceiveState: UploadReceiveState = UploadReceiveState.Idle
+    private var receiveState: ReceiveState = ReceiveState.Idle
 
     @Volatile
-    private var uploadContext: UploadContext? = null
+    private var transferContext: TransferContext? = null
 
     fun start() {
         startReceiver()
@@ -123,52 +123,38 @@ class ClientSession(
 
     suspend fun downloadFile(remotePath: String, targetFile: File, onProgress: ((Long, Long) -> Unit)? = null): DownloadResult {
         val safeRemotePath = sanitizeRemotePath(remotePath) ?: return DownloadResult.Failed
+        
         return transferMutex.withLock {
-            val escapedPath = shellEscape(safeRemotePath)
-            val sizeOutput = runManagedCommand("if [ -f '$escapedPath' ]; then wc -c < '$escapedPath'; else echo -1; fi")
-                ?: return@withLock DownloadResult.Failed
-            val total = sizeOutput.lineSequence().map { it.trim() }.firstOrNull { it.isNotBlank() }?.toLongOrNull()
-                ?: return@withLock DownloadResult.Failed
-            if (total < 0) return@withLock DownloadResult.NotFound
-            if (total == 0L) {
-                targetFile.parentFile?.mkdirs()
-                runCatching { targetFile.writeBytes(byteArrayOf()) }
-                onProgress?.invoke(0L, 0L)
-                return@withLock DownloadResult.Success
-            }
-
-            onProgress?.invoke(0L, total)
+            val deferred = CompletableDeferred<DownloadResult>()
             val tmpFile = File(targetFile.parentFile ?: File("."), "${targetFile.name}.part")
             tmpFile.parentFile?.mkdirs()
 
-            runCatching {
-                FileOutputStream(tmpFile, false).use { output ->
-                    var offset = 0L
-                    while (offset < total) {
-                        val count = minOf(DOWNLOAD_RAW_CHUNK_SIZE.toLong(), total - offset)
-                        val cmd = "dd if='$escapedPath' bs=1 skip=$offset count=$count 2>/dev/null | base64"
-                        val rawBase64 = runManagedCommand(cmd, timeoutMs = TRANSFER_TIMEOUT_MS) ?: return@withLock DownloadResult.Failed
-                        val compact = rawBase64.filterNot { it == '\r' || it == '\n' || it == ' ' || it == '\t' }
-                        val chunk = runCatching { Base64.getDecoder().decode(compact) }.getOrNull()
-                            ?: return@withLock DownloadResult.Failed
-                        if (chunk.isEmpty()) return@withLock DownloadResult.Failed
-                        output.write(chunk)
-                        offset += chunk.size
-                        onProgress?.invoke(offset.coerceAtMost(total), total)
-                    }
-                    output.flush()
-                }
-            }.getOrElse {
-                runCatching { tmpFile.delete() }
+            // Setup state before sending command
+            val ctx = TransferContext(
+                targetFile = targetFile,
+                tmpFile = tmpFile,
+                result = deferred,
+                onProgress = onProgress
+            )
+            transferContext = ctx
+            receiveState = ReceiveState.DownloadHeader
+
+            // Send command: download <path>
+            // Note: We don't use runManagedCommand because we need to hijack the receiver stream immediately
+            val cmd = "download ${shellEscape(safeRemotePath)}"
+            val sent = writeLineCommand(cmd, appendErrorToOutput = true)
+            if (!sent) {
+                resetTransferState("send command failed", cleanupFile = true)
                 return@withLock DownloadResult.Failed
             }
 
-            if (!tmpFile.renameTo(targetFile)) {
-                runCatching { tmpFile.delete() }
-                return@withLock DownloadResult.Failed
+            // Wait for completion with timeout
+            withTimeoutOrNull(TRANSFER_TIMEOUT_MS) {
+                deferred.await()
+            } ?: run {
+                resetTransferState("timeout", cleanupFile = true)
+                DownloadResult.Failed
             }
-
-            DownloadResult.Success
         }
     }
 
@@ -195,8 +181,8 @@ class ClientSession(
                     if (read <= 0) break
                     var offset = 0
                     while (offset < read) {
-                        when (uploadReceiveState) {
-                            UploadReceiveState.Idle -> {
+                        when (receiveState) {
+                            ReceiveState.Idle -> {
                                 val consumed = lineAccumulator.append(temp, offset, read - offset)
                                 offset += consumed
                                 while (true) {
@@ -210,12 +196,12 @@ class ClientSession(
                                 }
                             }
 
-                            UploadReceiveState.WaitUploadHeader -> {
-                                offset += consumeUploadHeader(temp, offset, read - offset)
+                            ReceiveState.DownloadHeader -> {
+                                offset += consumeDownloadHeader(temp, offset, read - offset)
                             }
 
-                            UploadReceiveState.RecvUploadBody -> {
-                                offset += consumeUploadBody(temp, offset, read - offset)
+                            ReceiveState.DownloadBody -> {
+                                offset += consumeDownloadBody(temp, offset, read - offset)
                             }
                         }
                     }
@@ -374,13 +360,13 @@ class ClientSession(
         }
     }
 
-    private enum class UploadReceiveState {
+    private enum class ReceiveState {
         Idle,
-        WaitUploadHeader,
-        RecvUploadBody
+        DownloadHeader,
+        DownloadBody
     }
 
-    private data class UploadContext(
+    private data class TransferContext(
         val targetFile: File,
         val tmpFile: File,
         val headerBuffer: ByteArray = ByteArray(8),
@@ -388,14 +374,17 @@ class ClientSession(
         var waitSeparator: Boolean = true,
         var remaining: Long = 0,
         var outputStream: FileOutputStream? = null,
-        val result: CompletableDeferred<DownloadResult>
+        val result: CompletableDeferred<DownloadResult>,
+        val onProgress: ((Long, Long) -> Unit)? = null,
+        var totalSize: Long = 0
     )
 
-    private fun consumeUploadHeader(buffer: ByteArray, start: Int, length: Int): Int {
-        val context = uploadContext ?: return length
+    private fun consumeDownloadHeader(buffer: ByteArray, start: Int, length: Int): Int {
+        val context = transferContext ?: return length
         var offset = start
         var remain = length
 
+        // 1. Read 8 bytes size (Big Endian)
         if (context.headerOffset < 8) {
             val copy = minOf(8 - context.headerOffset, remain)
             System.arraycopy(buffer, offset, context.headerBuffer, context.headerOffset, copy)
@@ -408,13 +397,14 @@ class ClientSession(
             return length
         }
 
+        // 2. Read newline separator
         if (context.waitSeparator && remain > 0) {
             val separator = buffer[offset]
             offset += 1
             remain -= 1
             if (separator != LINE_FEED) {
-                resetUploadState("invalid upload separator", cleanupFile = true)
-                return length
+                resetTransferState("invalid download separator: $separator", cleanupFile = true)
+                return length // Consume all to stop processing
             }
             context.waitSeparator = false
         }
@@ -423,27 +413,34 @@ class ClientSession(
             return length
         }
 
+        // 3. Parse size and prepare for body
         val size = bigEndianToLong(context.headerBuffer)
-        if (size <= 0L) {
-            val result = if (size == 0L) DownloadResult.NotFound else DownloadResult.Failed
-            completeUploadState(result, cleanupFile = true)
-            return length - remain
-        }
-
+        // Check for error condition (e.g. file not found might return size 0 or specific error code if protocol defines)
+        // Protocol says: 8 bytes size. If file not found, maybe server sends 0? Or maybe it doesn't send anything and we timeout?
+        // Assuming 0 means empty file.
+        
         context.tmpFile.parentFile?.mkdirs()
-        context.outputStream = runCatching { context.tmpFile.outputStream() }.getOrElse {
-            resetUploadState("open temp file failed: ${it.message}", cleanupFile = true)
-            return length - remain
+        context.outputStream = runCatching { FileOutputStream(context.tmpFile, false) }.getOrElse {
+            resetTransferState("open temp file failed: ${it.message}", cleanupFile = true)
+            return length // Consume all
         }
         context.remaining = size
-        uploadReceiveState = UploadReceiveState.RecvUploadBody
+        context.totalSize = size
+        context.onProgress?.invoke(0, size)
+        
+        if (size == 0L) {
+             completeTransferState(DownloadResult.Success, cleanupFile = false)
+        } else {
+             receiveState = ReceiveState.DownloadBody
+        }
+        
         return length - remain
     }
 
-    private fun consumeUploadBody(buffer: ByteArray, start: Int, length: Int): Int {
-        val context = uploadContext ?: return length
+    private fun consumeDownloadBody(buffer: ByteArray, start: Int, length: Int): Int {
+        val context = transferContext ?: return length
         if (context.remaining <= 0) {
-            completeUploadState(DownloadResult.Success, cleanupFile = false)
+            completeTransferState(DownloadResult.Success, cleanupFile = false)
             return 0
         }
 
@@ -451,8 +448,9 @@ class ClientSession(
         runCatching {
             context.outputStream?.write(buffer, start, writeSize)
             context.remaining -= writeSize
+            context.onProgress?.invoke(context.totalSize - context.remaining, context.totalSize)
         }.onFailure {
-            resetUploadState("write upload body failed: ${it.message}", cleanupFile = true)
+            resetTransferState("write download body failed: ${it.message}", cleanupFile = true)
             return length
         }
 
@@ -460,25 +458,35 @@ class ClientSession(
             runCatching { context.outputStream?.flush() }
             runCatching { context.outputStream?.close() }
             context.outputStream = null
-            if (!context.tmpFile.renameTo(context.targetFile)) {
-                resetUploadState("rename temp file failed", cleanupFile = true)
-                return writeSize
+            
+            if (context.tmpFile.exists() && !context.tmpFile.renameTo(context.targetFile)) {
+                // Try copy and delete if rename fails (e.g. across mount points)
+                val copyOk = runCatching { 
+                    context.tmpFile.copyTo(context.targetFile, overwrite = true)
+                    context.tmpFile.delete()
+                    true
+                }.getOrDefault(false)
+                
+                if (!copyOk) {
+                    resetTransferState("rename temp file failed", cleanupFile = true)
+                    return writeSize
+                }
             }
-            completeUploadState(DownloadResult.Success, cleanupFile = false)
+            completeTransferState(DownloadResult.Success, cleanupFile = false)
         }
         return writeSize
     }
 
-    private fun completeUploadState(result: DownloadResult, cleanupFile: Boolean) {
-        val context = uploadContext
+    private fun completeTransferState(result: DownloadResult, cleanupFile: Boolean) {
+        val context = transferContext
         if (context != null && !context.result.isCompleted) {
             context.result.complete(result)
         }
-        resetUploadState(null, cleanupFile)
+        resetTransferState(null, cleanupFile)
     }
 
-    private fun resetUploadState(reason: String?, cleanupFile: Boolean) {
-        val context = uploadContext
+    private fun resetTransferState(reason: String?, cleanupFile: Boolean) {
+        val context = transferContext
         if (context != null) {
             runCatching { context.outputStream?.close() }
             context.outputStream = null
@@ -489,8 +497,8 @@ class ClientSession(
                 context.result.complete(DownloadResult.Failed)
             }
         }
-        uploadContext = null
-        uploadReceiveState = UploadReceiveState.Idle
+        transferContext = null
+        receiveState = ReceiveState.Idle
         if (reason != null) {
             _output.value += "[transfer reset] $reason\n"
         }

@@ -79,6 +79,7 @@ class ClientSession(
     }
 
     suspend fun uploadFile(remotePath: String, localFile: File): Boolean {
+        if (!remotePath.startsWith("/")) return false
         if (!localFile.exists() || !localFile.isFile) return false
 
         return transferMutex.withLock {
@@ -87,8 +88,9 @@ class ClientSession(
                 val out = socket.getOutputStream()
 
                 sendMutex.withLock {
-                    out.write("upload $remotePath".toByteArray(StandardCharsets.UTF_8))
+                    out.write("upload $remotePath\n".toByteArray(StandardCharsets.UTF_8))
                     out.write(longToBigEndian(size))
+                    out.write(LINE_FEED.toInt())
                     localFile.inputStream().use { input ->
                         val buffer = ByteArray(FILE_CHUNK_SIZE)
                         while (true) {
@@ -105,17 +107,20 @@ class ClientSession(
     }
 
     suspend fun downloadFile(remotePath: String, targetFile: File): DownloadResult {
+        if (!remotePath.startsWith("/")) return DownloadResult.Failed
         return transferMutex.withLock {
             pauseReceiverForTransfer {
                 val input = socket.getInputStream()
                 val out = socket.getOutputStream()
 
                 sendMutex.withLock {
-                    out.write("download $remotePath".toByteArray(StandardCharsets.UTF_8))
+                    out.write("download $remotePath\n".toByteArray(StandardCharsets.UTF_8))
                     out.flush()
                 }
 
                 val sizeBytes = readExact(input, 8) ?: return@pauseReceiverForTransfer DownloadResult.Failed
+                val separator = input.read()
+                if (separator != LINE_FEED.toInt()) return@pauseReceiverForTransfer DownloadResult.Failed
                 val size = bigEndianToLong(sizeBytes)
                 if (size <= 0L) {
                     return@pauseReceiverForTransfer DownloadResult.NotFound
@@ -253,5 +258,6 @@ class ClientSession(
     companion object {
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
         private const val FILE_CHUNK_SIZE = 4096
+        private const val LINE_FEED: Byte = 0x0A
     }
 }

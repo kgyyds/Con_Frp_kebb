@@ -42,7 +42,8 @@ data class MainUiState(
     val fileEditorRemotePath: String = "",
     val fileEditorCachePath: String = "",
     val fileEditorOriginalContent: String = "",
-    val fileEditorContent: String = ""
+    val fileEditorContent: String = "",
+    val fileEditorConfirmDiscardVisible: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -236,13 +237,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 fileEditorRemotePath = "",
                 fileEditorCachePath = "",
                 fileEditorOriginalContent = "",
-                fileEditorContent = ""
+                fileEditorContent = "",
+                fileEditorConfirmDiscardVisible = false
             )
         }
     }
 
     fun closeFileEditor() {
-        _uiState.update { it.copy(fileEditorVisible = false) }
+        _uiState.update { state ->
+            if (!state.fileEditorVisible) return@update state
+            val hasUnsaved = state.fileEditorContent != state.fileEditorOriginalContent
+            if (hasUnsaved) state.copy(fileEditorConfirmDiscardVisible = true)
+            else state.copy(fileEditorVisible = false, fileEditorConfirmDiscardVisible = false)
+        }
+    }
+
+    fun cancelCloseFileEditor() {
+        _uiState.update { it.copy(fileEditorConfirmDiscardVisible = false) }
+    }
+
+    fun confirmCloseFileEditor() {
+        _uiState.update { it.copy(fileEditorVisible = false, fileEditorConfirmDiscardVisible = false) }
     }
 
     fun onEditorContentChanged(content: String) {
@@ -264,7 +279,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val session = currentFileManagerSession() ?: return@launch
             val ok = session.uploadFile(state.fileEditorRemotePath, cacheFile)
             if (ok) {
-                _uiState.update { it.copy(fileEditorOriginalContent = it.fileEditorContent) }
+                _uiState.update { it.copy(fileEditorOriginalContent = it.fileEditorContent, fileEditorConfirmDiscardVisible = false) }
                 FrpLogBus.append("[editor] upload success: ${state.fileEditorRemotePath}")
             } else {
                 FrpLogBus.append("[editor] upload failed: ${state.fileEditorRemotePath}")
@@ -341,7 +356,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         fileEditorRemotePath = remotePath,
                         fileEditorCachePath = cacheFile.absolutePath,
                         fileEditorOriginalContent = content,
-                        fileEditorContent = content
+                        fileEditorContent = content,
+                        fileEditorConfirmDiscardVisible = false
                     )
                 }
                 FrpLogBus.append("[editor] download success: $remotePath")

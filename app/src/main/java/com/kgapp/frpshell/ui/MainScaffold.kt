@@ -8,6 +8,8 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -157,6 +159,24 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         )
                     }
                 }
+            }
+
+            if (uiState.fileEditorConfirmDiscardVisible) {
+                AlertDialog(
+                    onDismissRequest = vm::cancelCloseFileEditor,
+                    title = { Text("放弃未保存更改？") },
+                    text = { Text("当前文件有未保存修改，确定退出编辑器吗？") },
+                    confirmButton = {
+                        TextButton(onClick = vm::confirmCloseFileEditor) {
+                            Text("放弃")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = vm::cancelCloseFileEditor) {
+                            Text("继续编辑")
+                        }
+                    }
+                )
             }
         }
     }

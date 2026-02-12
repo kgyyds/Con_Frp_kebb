@@ -23,9 +23,6 @@ class FrpManager(
     private var stderrJob: Job? = null
     private var monitorJob: Job? = null
 
-    @Volatile
-    private var permissionPrepared = false
-
     private val _running = MutableStateFlow(false)
     val running: StateFlow<Boolean> = _running.asStateFlow()
 
@@ -121,7 +118,6 @@ class FrpManager(
                     input.copyTo(out)
                 }
             }
-            permissionPrepared = false
         }
 
         val chmodResult = runCatching {
@@ -133,9 +129,8 @@ class FrpManager(
         if ((chmodResult != 0 || !frpcBinary.canExecute()) && !frpcBinary.setExecutable(true, false)) {
             return false
         }
-        permissionPrepared = true
 
-        return permissionPrepared && frpcBinary.canExecute()
+        return frpcBinary.canExecute()
     }
 
     private fun cleanupResidualFrpcWithSu() {
@@ -151,17 +146,17 @@ class FrpManager(
             FrpLogBus.append("[frp] no residual frpc process found")
             return
         }
-        FrpLogBus.append("[frp] residual frpc cleanup finished")
-    }
 
         FrpLogBus.append("[frp] residual frpc process found: ${pids.joinToString(",")}")
 
         val killResult = runCatching {
             ProcessBuilder("su", "-c", "kill ${pids.joinToString(" ")}").start().waitFor()
         }.getOrElse { -1 }
+
         if (killResult != 0) {
             ProcessBuilder("su", "-c", "kill -9 ${pids.joinToString(" ")}").start().waitFor()
         }
+
         FrpLogBus.append("[frp] residual frpc cleanup finished")
     }
 

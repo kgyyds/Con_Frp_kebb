@@ -27,10 +27,19 @@ class SettingsStore(context: Context) {
         prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
     }
 
+    fun getShellFontSizeSp(): Float = prefs.getFloat(KEY_SHELL_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
+
+    fun setShellFontSizeSp(value: Float) {
+        prefs.edit().putFloat(KEY_SHELL_FONT_SIZE_SP, value).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "frp_shell_settings"
         private const val KEY_INITIALIZED = "initialized"
         private const val KEY_USE_SU = "use_su"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_SHELL_FONT_SIZE_SP = "shell_font_size_sp"
+
+        const val DEFAULT_FONT_SIZE_SP = 14f
     }
 }

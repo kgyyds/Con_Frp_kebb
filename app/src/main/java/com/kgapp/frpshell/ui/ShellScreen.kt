@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.kgapp.frpshell.frp.FrpLogBus
 import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.server.TcpServer
@@ -32,6 +33,10 @@ import com.kgapp.frpshell.server.TcpServer
 @Composable
 fun ShellScreen(
     target: ShellTarget,
+    fontSizeSp: Float,
+    frpRunning: Boolean,
+    onStartFrp: () -> Unit,
+    onStopFrp: () -> Unit,
     onSend: (String) -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier
@@ -39,8 +44,13 @@ fun ShellScreen(
     var input by remember(target.id) { mutableStateOf("") }
     val output by when (target) {
         is ShellTarget.FrpLog -> FrpLogBus.logs.collectAsState()
-        is ShellTarget.Client -> (TcpServer.getClient(target.id)?.output ?: remember { kotlinx.coroutines.flow.MutableStateFlow("client disconnected\n") }).collectAsState()
+        is ShellTarget.Client -> {
+            val fallback = remember { kotlinx.coroutines.flow.MutableStateFlow("client disconnected\n") }
+            (TcpServer.getClient(target.id)?.output ?: fallback).collectAsState()
+        }
     }
+    val parsedBuffer = remember(target.id) { AnsiAnnotatedBuffer() }
+    val ansiOutput = remember(output, parsedBuffer) { parsedBuffer.update(output) }
     val scrollState = rememberScrollState()
 
     fun submit() {
@@ -61,29 +71,48 @@ fun ShellScreen(
             .padding(12.dp)
     ) {
         Text(
-            text = output,
+            text = ansiOutput,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .verticalScroll(scrollState),
-            fontFamily = FontFamily.Monospace
+            fontFamily = FontFamily.Monospace,
+            fontSize = fontSizeSp.sp
         )
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text(">") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { submit() })
-            )
-            Button(onClick = { submit() }) {
-                Text("发送")
+        if (target is ShellTarget.FrpLog) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(onClick = onStartFrp, enabled = !frpRunning) {
+                    Text("启动 frp")
+                }
+                Button(onClick = onStopFrp, enabled = frpRunning) {
+                    Text("停止 frp")
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text(">") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { submit() }),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = fontSizeSp.sp
+                    )
+                )
+                Button(onClick = { submit() }) {
+                    Text("发送")
+                }
             }
         }
     }

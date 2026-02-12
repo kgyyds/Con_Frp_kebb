@@ -97,10 +97,12 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         useSu = uiState.useSu,
                         suAvailable = uiState.suAvailable,
                         themeMode = uiState.themeMode,
+                        shellFontSizeSp = uiState.shellFontSizeSp,
                         firstLaunchFlow = uiState.firstLaunchFlow,
                         onConfigChanged = vm::onConfigChanged,
                         onUseSuChanged = vm::onUseSuChanged,
                         onThemeModeChanged = vm::onThemeModeChanged,
+                        onShellFontSizeChanged = vm::onShellFontSizeChanged,
                         onSave = vm::saveConfigOnly,
                         onSaveAndRestart = vm::saveAndRestartFrp,
                         contentPadding = padding
@@ -109,6 +111,10 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                     ShellScreen(
                         modifier = Modifier.fillMaxSize(),
                         target = uiState.selectedTarget,
+                        fontSizeSp = uiState.shellFontSizeSp,
+                        frpRunning = uiState.frpRunning,
+                        onStartFrp = vm::startFrp,
+                        onStopFrp = vm::stopFrp,
                         onSend = vm::sendCommand,
                         contentPadding = padding
                     )

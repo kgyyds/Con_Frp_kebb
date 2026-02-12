@@ -13,6 +13,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,10 +27,12 @@ fun SettingsScreen(
     useSu: Boolean,
     suAvailable: Boolean,
     themeMode: ThemeMode,
+    shellFontSizeSp: Float,
     firstLaunchFlow: Boolean,
     onConfigChanged: (String) -> Unit,
     onUseSuChanged: (Boolean) -> Unit,
     onThemeModeChanged: (ThemeMode) -> Unit,
+    onShellFontSizeChanged: (Float) -> Unit,
     onSave: () -> Unit,
     onSaveAndRestart: () -> Unit,
     modifier: Modifier = Modifier,
@@ -83,6 +86,15 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("终端字体大小：${shellFontSizeSp.toInt()}sp", style = MaterialTheme.typography.titleSmall)
+            Slider(
+                value = shellFontSizeSp,
+                onValueChange = onShellFontSizeChanged,
+                valueRange = 12f..24f
+            )
         }
 
         OutlinedTextField(

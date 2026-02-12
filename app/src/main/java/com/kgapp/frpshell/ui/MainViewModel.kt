@@ -28,7 +28,10 @@ data class MainUiState(
     val firstLaunchFlow: Boolean = false,
     val suAvailable: Boolean = false,
     val useSu: Boolean = false,
-    val themeMode: ThemeMode = ThemeMode.SYSTEM
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val localPort: Int = 23231,
+    val shellFontSizeSp: Float = SettingsStore.DEFAULT_FONT_SIZE_SP,
+    val frpRunning: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -39,7 +42,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     init {
-        TcpServer.start()
         viewModelScope.launch {
             TcpServer.clientIds.collect { ids ->
                 _uiState.update { state ->
@@ -53,19 +55,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        viewModelScope.launch {
+            frpManager.running.collect { running ->
+                _uiState.update { it.copy(frpRunning = running) }
+            }
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             val initialized = settingsStore.isInitialized()
             val suAvailable = FrpManager.detectSuAvailable()
             val useSuDefault = if (initialized) settingsStore.getUseSu() else suAvailable
             val themeMode = settingsStore.getThemeMode()
+            val shellFontSizeSp = settingsStore.getShellFontSizeSp().coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
+
             if (!initialized) {
                 settingsStore.setUseSu(useSuDefault)
                 settingsStore.setThemeMode(ThemeMode.SYSTEM)
+                settingsStore.setShellFontSizeSp(SettingsStore.DEFAULT_FONT_SIZE_SP)
                 settingsStore.setInitialized(true)
             }
 
             val configExists = frpManager.configExists()
             val content = if (configExists) frpManager.readConfig() else DEFAULT_CONFIG_TEMPLATE
+            val localPort = resolveLocalPort(content)
 
             _uiState.update {
                 it.copy(
@@ -74,9 +86,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     configContent = content,
                     suAvailable = suAvailable,
                     useSu = useSuDefault,
-                    themeMode = themeMode
+                    themeMode = themeMode,
+                    localPort = localPort,
+                    shellFontSizeSp = shellFontSizeSp
                 )
             }
+
+            TcpServer.start(localPort)
 
             if (configExists) {
                 if (useSuDefault && !suAvailable) {
@@ -103,6 +119,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(themeMode = mode) }
     }
 
+    fun onShellFontSizeChanged(sizeSp: Float) {
+        val adjusted = sizeSp.coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
+        settingsStore.setShellFontSizeSp(adjusted)
+        _uiState.update { it.copy(shellFontSizeSp = adjusted) }
+    }
+
     fun openSettings() {
         _uiState.update { it.copy(screen = ScreenDestination.Settings, firstLaunchFlow = false) }
     }
@@ -118,8 +140,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         frpManager.saveConfig(state.configContent)
         settingsStore.setUseSu(state.useSu)
         settingsStore.setThemeMode(state.themeMode)
-        _uiState.update { it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main) }
-        FrpLogBus.append("[settings] saved (useSu=${state.useSu}, theme=${state.themeMode})")
+        settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
+
+        val localPort = resolveLocalPort(state.configContent)
+        TcpServer.start(localPort)
+
+        _uiState.update {
+            it.copy(
+                firstLaunchFlow = false,
+                screen = ScreenDestination.Main,
+                localPort = localPort,
+                selectedTarget = ShellTarget.FrpLog
+            )
+        }
+        FrpLogBus.append(
+            "[settings] saved (useSu=${state.useSu}, theme=${state.themeMode}, localPort=$localPort, font=${state.shellFontSizeSp})"
+        )
     }
 
     fun saveAndRestartFrp() {
@@ -127,13 +163,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         frpManager.saveConfig(state.configContent)
         settingsStore.setUseSu(state.useSu)
         settingsStore.setThemeMode(state.themeMode)
-        _uiState.update { it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main) }
+        settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
+
+        val localPort = resolveLocalPort(state.configContent)
+        TcpServer.start(localPort)
+
+        _uiState.update {
+            it.copy(
+                firstLaunchFlow = false,
+                screen = ScreenDestination.Main,
+                localPort = localPort,
+                selectedTarget = ShellTarget.FrpLog
+            )
+        }
 
         viewModelScope.launch {
             if (state.useSu && !state.suAvailable) {
                 FrpLogBus.append("[settings] su enabled but unavailable, start may fail")
             }
             frpManager.restart(state.useSu)
+        }
+    }
+
+    fun startFrp() {
+        val state = _uiState.value
+        viewModelScope.launch {
+            if (state.useSu && !state.suAvailable) {
+                FrpLogBus.append("[settings] su enabled but unavailable, start may fail")
+            }
+            frpManager.start(state.useSu)
+        }
+    }
+
+    fun stopFrp() {
+        viewModelScope.launch {
+            frpManager.stop()
         }
     }
 
@@ -144,7 +208,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun resolveLocalPort(config: String): Int {
+        val parsed = FrpManager.parseLocalPort(config)
+        if (parsed == null) {
+            FrpLogBus.append("[config] localPort not found, fallback to $DEFAULT_LOCAL_PORT")
+        } else {
+            FrpLogBus.append("[config] localPort=$parsed")
+        }
+        return parsed ?: DEFAULT_LOCAL_PORT
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        TcpServer.stopAll()
+    }
+
     companion object {
+        private const val DEFAULT_LOCAL_PORT = 23231
+        private const val MIN_FONT_SIZE_SP = 12f
+        private const val MAX_FONT_SIZE_SP = 24f
+
         private const val DEFAULT_CONFIG_TEMPLATE = """
 serverAddr = "your.server.com"
 serverPort = 7000

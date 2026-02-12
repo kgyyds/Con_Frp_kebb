@@ -10,16 +10,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ClientSession(
     val id: String,
     private val socket: Socket,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val onClosed: (String) -> Unit
 ) {
     private val _output = MutableStateFlow("")
     val output: StateFlow<String> = _output.asStateFlow()
 
     private var recvJob: Job? = null
+    private val closed = AtomicBoolean(false)
 
     fun start() {
         recvJob = scope.launch(Dispatchers.IO) {
@@ -53,8 +56,10 @@ class ClientSession(
     }
 
     fun close() {
+        if (!closed.compareAndSet(false, true)) return
         runCatching { socket.close() }
         recvJob?.cancel()
         scope.cancel()
+        onClosed(id)
     }
 }

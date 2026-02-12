@@ -313,9 +313,11 @@ class ClientSession(
     companion object {
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
         private const val FILE_CHUNK_SIZE = 4096
-        private const val UPLOAD_RAW_CHUNK_SIZE = 2048
+        // Reduced chunk size to prevent shell command length limit issues and receiver buffer overflows
+        private const val UPLOAD_RAW_CHUNK_SIZE = 512 
         private const val DOWNLOAD_RAW_CHUNK_SIZE = 3072
-        private const val MAX_LINE = 1024
+        // Increased max line length to handle command echoes and long paths
+        private const val MAX_LINE = 8192
         private const val MAX_REMOTE_PATH = 4096
         private const val LINE_FEED: Byte = 0x0A
         private const val CLIENT_COMMAND_END_MARKER = "<<END>>"

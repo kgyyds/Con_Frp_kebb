@@ -207,7 +207,7 @@ class ClientSession(
                     }
                 }
             }.onFailure {
-                resetUploadState(it.message ?: "receiver error", cleanupFile = true)
+                resetTransferState(it.message ?: "receiver error", cleanupFile = true)
                 if (!closed.get()) {
                     _output.value += "[session closed] ${it.message ?: "unknown"}\n"
                 }

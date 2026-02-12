@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
@@ -23,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.ui.theme.FrpShellTheme
 import kotlinx.coroutines.launch
 
@@ -61,28 +63,34 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                     TopAppBar(
                         title = {
                             Text(
-                                if (isSettings) "设置" else "FRP Shell",
+                                if (isSettings) "设置" else if (uiState.fileEditorVisible) "文件编辑" else if (uiState.fileManagerVisible) "文件管理" else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
                             )
                         },
                         navigationIcon = {
                             IconButton(
                                 onClick = {
-                                    if (isSettings) {
-                                        vm.navigateBackToMain()
-                                    } else {
-                                        scope.launch { drawerState.open() }
+                                    when {
+                                        isSettings -> vm.navigateBackToMain()
+                                        uiState.fileEditorVisible -> vm.closeFileEditor()
+                                        uiState.fileManagerVisible -> vm.closeFileManager()
+                                        else -> scope.launch { drawerState.open() }
                                     }
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings) "back" else "open drawer"
+                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible) "back" else "open drawer"
                                 )
                             }
                         },
                         actions = {
                             if (!isSettings) {
+                                if (!uiState.fileManagerVisible && !uiState.fileEditorVisible && uiState.selectedTarget is ShellTarget.Client) {
+                                    IconButton(onClick = vm::openFileManager) {
+                                        Icon(Icons.Default.Folder, contentDescription = "file manager")
+                                    }
+                                }
                                 IconButton(onClick = vm::openSettings) {
                                     Icon(Icons.Default.Settings, contentDescription = "settings")
                                 }
@@ -91,33 +99,63 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                     )
                 }
             ) { padding ->
-                if (isSettings) {
-                    SettingsScreen(
-                        configContent = uiState.configContent,
-                        useSu = uiState.useSu,
-                        suAvailable = uiState.suAvailable,
-                        themeMode = uiState.themeMode,
-                        shellFontSizeSp = uiState.shellFontSizeSp,
-                        firstLaunchFlow = uiState.firstLaunchFlow,
-                        onConfigChanged = vm::onConfigChanged,
-                        onUseSuChanged = vm::onUseSuChanged,
-                        onThemeModeChanged = vm::onThemeModeChanged,
-                        onShellFontSizeChanged = vm::onShellFontSizeChanged,
-                        onSave = vm::saveConfigOnly,
-                        onSaveAndRestart = vm::saveAndRestartFrp,
-                        contentPadding = padding
-                    )
-                } else {
-                    ShellScreen(
-                        modifier = Modifier.fillMaxSize(),
-                        target = uiState.selectedTarget,
-                        fontSizeSp = uiState.shellFontSizeSp,
-                        frpRunning = uiState.frpRunning,
-                        onStartFrp = vm::startFrp,
-                        onStopFrp = vm::stopFrp,
-                        onSend = vm::sendCommand,
-                        contentPadding = padding
-                    )
+                when {
+                    isSettings -> {
+                        SettingsScreen(
+                            configContent = uiState.configContent,
+                            useSu = uiState.useSu,
+                            suAvailable = uiState.suAvailable,
+                            themeMode = uiState.themeMode,
+                            shellFontSizeSp = uiState.shellFontSizeSp,
+                            firstLaunchFlow = uiState.firstLaunchFlow,
+                            onConfigChanged = vm::onConfigChanged,
+                            onUseSuChanged = vm::onUseSuChanged,
+                            onThemeModeChanged = vm::onThemeModeChanged,
+                            onShellFontSizeChanged = vm::onShellFontSizeChanged,
+                            onSave = vm::saveConfigOnly,
+                            onSaveAndRestart = vm::saveAndRestartFrp,
+                            contentPadding = padding
+                        )
+                    }
+
+                    uiState.fileEditorVisible -> {
+                        FileEditorScreen(
+                            remotePath = uiState.fileEditorRemotePath,
+                            content = uiState.fileEditorContent,
+                            fontSizeSp = uiState.shellFontSizeSp,
+                            contentPadding = padding,
+                            onContentChange = vm::onEditorContentChanged,
+                            onSave = vm::saveEditor,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    uiState.fileManagerVisible -> {
+                        FileManagerScreen(
+                            currentPath = uiState.fileManagerPath,
+                            files = uiState.fileManagerFiles,
+                            contentPadding = padding,
+                            onRefresh = vm::fileManagerRefresh,
+                            onBackDirectory = vm::fileManagerBackDirectory,
+                            onOpenFile = vm::fileManagerOpen,
+                            onRename = vm::fileManagerRename,
+                            onChmod = vm::fileManagerChmod,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    else -> {
+                        ShellScreen(
+                            modifier = Modifier.fillMaxSize(),
+                            target = uiState.selectedTarget,
+                            fontSizeSp = uiState.shellFontSizeSp,
+                            frpRunning = uiState.frpRunning,
+                            onStartFrp = vm::startFrp,
+                            onStopFrp = vm::stopFrp,
+                            onSend = vm::sendCommand,
+                            contentPadding = padding
+                        )
+                    }
                 }
             }
         }

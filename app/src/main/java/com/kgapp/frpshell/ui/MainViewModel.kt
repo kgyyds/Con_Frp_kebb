@@ -414,7 +414,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val toolExists = checkResult?.contains("scrcpy-server.jar") == true
 
                 if (!toolExists) {
-                     _uiState.update { it.copy(screenCaptureLoadingText = "上传组件...") }
+                     _uiState.update { it.copy(screenCaptureLoadingText = "准备上传组件...") }
                      val context = getApplication<Application>()
                      val localJar = File(context.cacheDir, "scrcpy-server.jar")
                      
@@ -429,7 +429,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                          return@launch
                      }
 
-                     val ok = session.uploadFile("/data/local/tmp/scrcpy-server.jar", localJar)
+                     val ok = session.uploadFile("/data/local/tmp/scrcpy-server.jar", localJar) { done, total ->
+                         val percent = if (total > 0) (done * 100 / total).toInt() else 0
+                         _uiState.update { it.copy(screenCaptureLoadingText = "上传组件中 $percent%") }
+                     }
                      if (!ok) {
                          FrpLogBus.append("[photo] upload failed")
                          return@launch
@@ -451,11 +454,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val output = session.runManagedCommand(cmd, timeoutMs = 12000)
                 
                 if (output?.contains("donePhoto") == true) {
-                    _uiState.update { it.copy(screenCaptureLoadingText = "获取照片...") }
+                    _uiState.update { it.copy(screenCaptureLoadingText = "准备获取照片...") }
                     val remotePath = "/data/local/tmp/scrcpy_test.jpg"
                     val cacheFile = File(getApplication<Application>().cacheDir, "photo_${System.currentTimeMillis()}.jpg")
                     
-                    val result = session.downloadFile(remotePath, cacheFile)
+                    val result = session.downloadFile(remotePath, cacheFile) { done, total ->
+                        val percent = if (total > 0) (done * 100 / total).toInt() else 0
+                        _uiState.update { it.copy(screenCaptureLoadingText = "下载照片中 $percent%") }
+                    }
                     
                     if (result == ClientSession.DownloadResult.Success) {
                          _uiState.update { 

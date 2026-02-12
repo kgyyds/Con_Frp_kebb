@@ -48,7 +48,10 @@ data class MainUiState(
     val fileTransferVisible: Boolean = false,
     val fileTransferTitle: String = "",
     val fileTransferDone: Long = 0L,
-    val fileTransferTotal: Long = 0L
+    val fileTransferTotal: Long = 0L,
+    val screenViewerVisible: Boolean = false,
+    val screenViewerImagePath: String = "",
+    val screenViewerTimestamp: Long = 0L
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -299,6 +302,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 FrpLogBus.append("[editor] upload failed: ${state.fileEditorRemotePath}")
             }
         }
+    fun captureScreen() {
+        val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = TcpServer.getClient(target.id) ?: return@launch
+            
+            FrpLogBus.append("[screen] capturing...")
+            // 1. Send screencap command
+            // 使用用户指定的命令 screencap -j (注意：标准Android screencap通常只支持-p，但这里遵从用户指令)
+            session.runManagedCommand("screencap -j /data/local/tmp/tmp.jpg")
+            
+            // 2. Download the file
+            val remotePath = "/data/local/tmp/tmp.jpg"
+            val cacheFile = File(getApplication<Application>().cacheDir, "screen_${System.currentTimeMillis()}.jpg")
+            
+            beginTransfer("获取截图中...")
+            val result = session.downloadFile(remotePath, cacheFile) { done, total ->
+                reportTransfer(done, total)
+            }
+            endTransfer()
+            
+            if (result == ClientSession.DownloadResult.Success) {
+                 _uiState.update { 
+                     it.copy(
+                         screenViewerVisible = true, 
+                         screenViewerImagePath = cacheFile.absolutePath,
+                         screenViewerTimestamp = System.currentTimeMillis()
+                     )
+                 }
+                 FrpLogBus.append("[screen] capture success")
+                 
+                 // Clean up remote file
+                 session.runManagedCommand("rm /data/local/tmp/tmp.jpg")
+            } else {
+                 FrpLogBus.append("[screen] capture failed: download error")
+            }
+        }
+    }
+
+    fun closeScreenViewer() {
+        _uiState.update { it.copy(screenViewerVisible = false, screenViewerImagePath = "") }
     }
 
     fun fileManagerRefresh() {

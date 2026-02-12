@@ -94,6 +94,9 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
 
+    // Coil
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
     // Debug tools
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

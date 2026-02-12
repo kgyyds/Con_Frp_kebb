@@ -6,11 +6,13 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
@@ -20,6 +22,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -108,7 +111,11 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                     TopAppBar(
                         title = {
                             Text(
-                                if (isSettings) "设置" else if (uiState.fileEditorVisible) "文件编辑" else if (uiState.fileManagerVisible) "文件管理" else "FRP Shell",
+                                if (isSettings) "设置" 
+                                else if (uiState.fileEditorVisible) "文件编辑" 
+                                else if (uiState.fileManagerVisible) "文件管理" 
+                                else if (uiState.screenViewerVisible) "屏幕截图"
+                                else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
                             )
                         },
@@ -119,13 +126,14 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                         isSettings -> vm.navigateBackToMain()
                                         uiState.fileEditorVisible -> vm.closeFileEditor()
                                         uiState.fileManagerVisible -> vm.closeFileManager()
+                                        uiState.screenViewerVisible -> vm.closeScreenViewer()
                                         else -> scope.launch { drawerState.open() }
                                     }
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible) "back" else "open drawer"
+                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.screenViewerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.screenViewerVisible) "back" else "open drawer"
                                 )
                             }
                         },
@@ -134,8 +142,11 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 IconButton(onClick = vm::saveEditor) {
                                     Icon(Icons.Default.Save, contentDescription = "save")
                                 }
-                            } else if (!isSettings) {
+                            } else if (!isSettings && !uiState.screenViewerVisible) {
                                 if (!uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client) {
+                                    IconButton(onClick = vm::captureScreen) {
+                                        Icon(Icons.Default.Image, contentDescription = "capture screen")
+                                    }
                                     IconButton(onClick = vm::openFileManager) {
                                         Icon(Icons.Default.Folder, contentDescription = "file manager")
                                     }
@@ -176,6 +187,14 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             onContentChange = vm::onEditorContentChanged,
                             onSave = vm::saveEditor,
                             modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    uiState.screenViewerVisible -> {
+                        ScreenViewerScreen(
+                            imagePath = uiState.screenViewerImagePath,
+                            timestamp = uiState.screenViewerTimestamp,
+                            contentPadding = padding
                         )
                     }
 
@@ -230,6 +249,23 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             Text("继续编辑")
                         }
                     }
+                )
+            }
+
+            if (uiState.fileTransferVisible && !uiState.fileManagerVisible) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text(uiState.fileTransferTitle) },
+                    text = {
+                        Column {
+                            val progress = if (uiState.fileTransferTotal > 0L) {
+                                (uiState.fileTransferDone.toFloat() / uiState.fileTransferTotal.toFloat()).coerceIn(0f, 1f)
+                            } else 0f
+                            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                            Text("${uiState.fileTransferDone}/${uiState.fileTransferTotal}")
+                        }
+                    },
+                    confirmButton = {}
                 )
             }
         }

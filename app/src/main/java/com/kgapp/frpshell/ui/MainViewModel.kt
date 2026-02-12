@@ -436,42 +436,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 
                 // 1. Check tool
                 _uiState.update { it.copy(screenCaptureLoadingText = "正在检查远程组件...") }
-                val checkResult = session.runManagedCommand("ls /data/local/tmp/scrcpy-server.jar")
-                val toolExists = checkResult?.contains("scrcpy-server.jar") == true
+                
+                val context = getApplication<Application>()
+                val localJar = File(context.filesDir, "scrcpy-server.jar")
+                
+                // Ensure local file exists
+                if (!localJar.exists() || localJar.length() == 0L) {
+                    copyAssetToFile(context, "scrcpy-server.jar", localJar)
+                }
+                
+                if (!localJar.exists() || localJar.length() == 0L) {
+                    _uiState.update { it.copy(screenCaptureLoadingText = "本地组件缺失，无法继续") }
+                    FrpLogBus.append("[photo] local asset missing")
+                    return@launch
+                }
 
+                // Check remote file using shell conditional for robustness
+                // "wc -c" can be unreliable across different android versions/shells
+                val checkCmd = "if [ -f /data/local/tmp/scrcpy-server.jar ]; then echo 'exists'; else echo 'missing'; fi"
+                val checkResult = session.runManagedCommand(checkCmd)?.trim()
+                val toolExists = checkResult?.contains("exists") == true
+                
                 if (!toolExists) {
                      _uiState.update { it.copy(screenCaptureLoadingText = "远程组件缺失，准备上传...") }
-                     val context = getApplication<Application>()
-                     val localJar = File(context.filesDir, "scrcpy-server.jar")
-                     
-                     if (!localJar.exists() || localJar.length() == 0L) {
-                         copyAssetToFile(context, "scrcpy-server.jar", localJar)
-                     }
-                     
-                     if (!localJar.exists()) {
-                         FrpLogBus.append("[photo] asset missing: ${localJar.absolutePath}")
-                         _uiState.update { it.copy(screenCaptureLoadingText = "本地组件缺失，无法上传") }
-                         return@launch
-                     }
+                     FrpLogBus.append("[photo] remote tool missing, uploading...")
 
                      val ok = session.uploadFile("/data/local/tmp/scrcpy-server.jar", localJar) { done, total ->
                          val percent = if (total > 0) (done * 100 / total).toInt() else 0
                          _uiState.update { it.copy(screenCaptureLoadingText = "正在上传组件: $percent%") }
                      }
+                     
                      if (!ok) {
-                         FrpLogBus.append("[photo] upload failed")
+                         FrpLogBus.append("[photo] uploadFile returned false")
+                         _uiState.update { it.copy(screenCaptureLoadingText = "组件上传失败") }
                          return@launch
                      }
                      
                      session.runManagedCommand("chmod 777 /data/local/tmp/scrcpy-server.jar")
-                     
-                     val recheck = session.runManagedCommand("ls /data/local/tmp/scrcpy-server.jar")
-                     if (recheck?.contains("scrcpy-server.jar") != true) {
-                         FrpLogBus.append("[photo] verify upload failed")
-                         return@launch
-                     }
                 } else {
-                     _uiState.update { it.copy(screenCaptureLoadingText = "远程组件检查通过") }
+                     FrpLogBus.append("[photo] remote tool exists, skipping upload")
+                     _uiState.update { it.copy(screenCaptureLoadingText = "组件检查通过") }
+                }
+
+                // Double check existence before execution
+                val verifyCmd = "ls -l /data/local/tmp/scrcpy-server.jar"
+                val verifyResult = session.runManagedCommand(verifyCmd)
+                if (verifyResult == null || !verifyResult.contains("scrcpy-server.jar")) {
+                     FrpLogBus.append("[photo] fatal: remote tool not found after setup. Result: $verifyResult")
+                     _uiState.update { it.copy(screenCaptureLoadingText = "组件校验失败") }
+                     return@launch
                 }
 
                 // 2. Take photo

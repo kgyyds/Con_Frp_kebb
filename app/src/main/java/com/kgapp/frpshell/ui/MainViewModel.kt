@@ -419,134 +419,144 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(cameraSelectorVisible = false) }
     }
 
-    fun takePhoto(cameraId: Int) {
-        val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
-        if (_uiState.value.screenCaptureLoading) return
-        closeCameraSelector()
+    fun takePhoto(cameraId: Int) {  
+    val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return  
+    if (_uiState.value.screenCaptureLoading) return  
+    closeCameraSelector()  
 
-        captureJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(screenCaptureLoading = true, screenCaptureCancelable = false, screenCaptureLoadingText = "准备中...", screenCaptureLog = "") }
+    captureJob = viewModelScope.launch(Dispatchers.IO) {  
+        _uiState.update { it.copy(screenCaptureLoading = true, screenCaptureCancelable = false, screenCaptureLoadingText = "准备中...", screenCaptureLog = "") }  
 
-            val cancelTimer = launch {
-                kotlinx.coroutines.delay(4000)
-                _uiState.update { it.copy(screenCaptureCancelable = true) }
+        val cancelTimer = launch {  
+            kotlinx.coroutines.delay(4000)  
+            _uiState.update { it.copy(screenCaptureCancelable = true) }  
+        }  
+          
+        fun updateLog(msg: String) {  
+            _uiState.update { it.copy(screenCaptureLog = msg) }  
+        }  
+
+        try {  
+            val session = TcpServer.getClient(target.id) ?: return@launch  
+              
+            // --- 1️⃣ 检查和上传 jar 部分保持不动 ---
+            _uiState.update { it.copy(screenCaptureLoadingText = "正在检查远程组件...") }  
+
+            val context = getApplication<Application>()  
+            val localJar = File(context.filesDir, "scrcpy-server.jar")  
+
+            if (!localJar.exists() || localJar.length() == 0L) {  
+                copyAssetToFile(context, "scrcpy-server.jar", localJar)  
+            }  
+
+            if (!localJar.exists() || localJar.length() == 0L) {  
+                _uiState.update { it.copy(screenCaptureLoadingText = "本地组件缺失，无法继续") }  
+                updateLog("错误：本地组件文件丢失")  
+                return@launch  
+            }  
+
+            val checkCmd = "if [ -f /data/local/tmp/scrcpy-server.jar ]; then echo 'exists'; else echo 'missing'; fi"  
+            val checkResult = session.runManagedCommand(checkCmd)?.trim()  
+            val toolExists = checkResult?.contains("exists") == true  
+
+            if (!toolExists) {  
+                 _uiState.update { it.copy(screenCaptureLoadingText = "远程组件缺失，准备上传...") }  
+                 updateLog("正在上传 scrcpy-server.jar...")  
+
+                 val ok = session.uploadFile("/data/local/tmp/scrcpy-server.jar", localJar) { done, total ->  
+                     val percent = if (total > 0) (done * 100 / total).toInt() else 0  
+                     _uiState.update { it.copy(screenCaptureLoadingText = "正在上传组件: $percent%") }  
+                 }  
+                   
+                 if (!ok) {  
+                     updateLog("错误：文件上传失败")  
+                     _uiState.update { it.copy(screenCaptureLoadingText = "组件上传失败") }  
+                     return@launch  
+                 }  
+                   
+                 session.runManagedCommand("chmod 777 /data/local/tmp/scrcpy-server.jar")  
+            } else {  
+                 updateLog("远程组件检查通过")  
+                 _uiState.update { it.copy(screenCaptureLoadingText = "组件检查通过") }  
+            }  
+
+            val verifyCmd = "ls -l /data/local/tmp/scrcpy-server.jar"  
+            val verifyResult = session.runManagedCommand(verifyCmd)  
+            if (verifyResult == null || !verifyResult.contains("scrcpy-server.jar")) {  
+                 updateLog("错误：组件校验失败，远程文件不可见")  
+                 _uiState.update { it.copy(screenCaptureLoadingText = "组件校验失败") }  
+                 return@launch  
+            }  
+
+            // --- 2️⃣ 改动：拍照执行方式 ---
+            _uiState.update { it.copy(screenCaptureLoadingText = "正在执行拍照指令...") }  
+            updateLog("发送拍照指令 (camera_id=$cameraId)...")  
+
+            val cmd = "CLASSPATH=/data/local/tmp/scrcpy-server.jar " +
+                      "app_process /data/local/tmp com.genymobile.scrcpy.Server " +
+                      "video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1 &"
+
+            // Fire and forget
+            session.runManagedCommand(cmd)  
+
+            updateLog("等待照片生成 (轮询)...")  
+
+            // --- 3️⃣ 改动：每隔1秒轮询照片是否生成 ---
+            val remotePath = "/data/local/tmp/scrcpy_test.jpg"
+            val pollInterval = 1000L
+            val timeoutMs = 30_000L
+            val startTime = System.currentTimeMillis()
+            var photoExists = false
+
+            while (System.currentTimeMillis() - startTime < timeoutMs) {
+                val checkPhotoCmd = "ls $remotePath 2>/dev/null || true"
+                val result = session.runManagedCommand(checkPhotoCmd, timeoutMs = 2000)?.trim()
+                if (result != null && result.contains(remotePath)) {
+                    photoExists = true
+                    break
+                }
+                kotlinx.coroutines.delay(pollInterval)
             }
-            
-            fun updateLog(msg: String) {
-                _uiState.update { it.copy(screenCaptureLog = msg) }
-            }
 
-            try {
-                val session = TcpServer.getClient(target.id) ?: return@launch
-                
-                // 1. Check tool
-                _uiState.update { it.copy(screenCaptureLoadingText = "正在检查远程组件...") }
-                
-                val context = getApplication<Application>()
-                val localJar = File(context.filesDir, "scrcpy-server.jar")
-                
-                // Ensure local file exists
-                if (!localJar.exists() || localJar.length() == 0L) {
-                    copyAssetToFile(context, "scrcpy-server.jar", localJar)
-                }
-                
-                if (!localJar.exists() || localJar.length() == 0L) {
-                    _uiState.update { it.copy(screenCaptureLoadingText = "本地组件缺失，无法继续") }
-                    updateLog("错误：本地组件文件丢失")
-                    return@launch
+            // --- 4️⃣ 下载照片 ---
+            if (photoExists) {
+                _uiState.update { it.copy(screenCaptureLoadingText = "拍照成功，准备获取照片...") }  
+                updateLog("开始下载照片...")  
+
+                val cacheFile = File(getApplication<Application>().cacheDir, "photo_${System.currentTimeMillis()}.jpg")  
+
+                val result = session.downloadFile(remotePath, cacheFile) { done, total ->
+                    val percent = if (total > 0) (done * 100 / total).toInt() else 0
+                    _uiState.update { it.copy(screenCaptureLoadingText = "正在下载照片: $percent%") }
                 }
 
-                // Check remote file using shell conditional for robustness
-                val checkCmd = "if [ -f /data/local/tmp/scrcpy-server.jar ]; then echo 'exists'; else echo 'missing'; fi"
-                val checkResult = session.runManagedCommand(checkCmd)?.trim()
-                val toolExists = checkResult?.contains("exists") == true
-                
-                if (!toolExists) {
-                     _uiState.update { it.copy(screenCaptureLoadingText = "远程组件缺失，准备上传...") }
-                     updateLog("正在上传 scrcpy-server.jar...")
-
-                     val ok = session.uploadFile("/data/local/tmp/scrcpy-server.jar", localJar) { done, total ->
-                         val percent = if (total > 0) (done * 100 / total).toInt() else 0
-                         _uiState.update { it.copy(screenCaptureLoadingText = "正在上传组件: $percent%") }
-                     }
-                     
-                     if (!ok) {
-                         updateLog("错误：文件上传失败")
-                         _uiState.update { it.copy(screenCaptureLoadingText = "组件上传失败") }
-                         return@launch
-                     }
-                     
-                     session.runManagedCommand("chmod 777 /data/local/tmp/scrcpy-server.jar")
-                } else {
-                     updateLog("远程组件检查通过")
-                     _uiState.update { it.copy(screenCaptureLoadingText = "组件检查通过") }
-                }
-
-                // Double check existence before execution
-                val verifyCmd = "ls -l /data/local/tmp/scrcpy-server.jar"
-                val verifyResult = session.runManagedCommand(verifyCmd)
-                if (verifyResult == null || !verifyResult.contains("scrcpy-server.jar")) {
-                     updateLog("错误：组件校验失败，远程文件不可见")
-                     _uiState.update { it.copy(screenCaptureLoadingText = "组件校验失败") }
-                     return@launch
-                }
-
-                // 2. Take photo
-                _uiState.update { it.copy(screenCaptureLoadingText = "正在执行拍照指令...") }
-                updateLog("发送拍照指令 (camera_id=$cameraId)...")
-                
-                val cmd = "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId "
-                
-                // Fire and forget (in background)
-                session.runManagedCommand(cmd)
-                
-                updateLog("等待拍照完成 (7s)...")
-                kotlinx.coroutines.delay(7000)
-
-                // 3. Check result file
-                _uiState.update { it.copy(screenCaptureLoadingText = "正在验证结果...") }
-                val remotePath = "/data/local/tmp/scrcpy_test.jpg"
-                val checkPhotoCmd = "if [ -f $remotePath ]; then echo 'exists'; else echo 'missing'; fi"
-                val photoCheckResult = session.runManagedCommand(checkPhotoCmd, timeoutMs = 32000)?.trim()
-                
-                if (photoCheckResult?.contains("exists") == true) {
-                    _uiState.update { it.copy(screenCaptureLoadingText = "拍照成功，准备获取照片...") }
-                    updateLog("开始下载照片...")
-                    
-                    val cacheFile = File(getApplication<Application>().cacheDir, "photo_${System.currentTimeMillis()}.jpg")
-                    
-                    val result = session.downloadFile(remotePath, cacheFile) { done, total ->
-                        val percent = if (total > 0) (done * 100 / total).toInt() else 0
-                        _uiState.update { it.copy(screenCaptureLoadingText = "正在下载照片: $percent%") }
+                if (result == ClientSession.DownloadResult.Success) {
+                    updateLog("下载完成")
+                    _uiState.update {   
+                        it.copy(
+                            screenViewerVisible = true,   
+                            screenViewerImagePath = cacheFile.absolutePath,  
+                            screenViewerTimestamp = System.currentTimeMillis()  
+                        )  
                     }
-                    
-                    if (result == ClientSession.DownloadResult.Success) {
-                         updateLog("下载完成")
-                         _uiState.update { 
-                             it.copy(
-                                 screenViewerVisible = true, 
-                                 screenViewerImagePath = cacheFile.absolutePath,
-                                 screenViewerTimestamp = System.currentTimeMillis()
-                             )
-                         }
-                         session.runManagedCommand("rm $remotePath")
-                    } else {
-                        updateLog("错误：照片下载失败")
-                        _uiState.update { it.copy(screenCaptureLoadingText = "下载失败") }
-                    }
+                    session.runManagedCommand("rm $remotePath")
                 } else {
-                    updateLog("错误：未检测到照片生成 (超时)")
-                    _uiState.update { it.copy(screenCaptureLoadingText = "拍照失败") }
+                    updateLog("错误：照片下载失败")
+                    _uiState.update { it.copy(screenCaptureLoadingText = "下载失败") }
                 }
-
-            } catch (e: Exception) {
-                updateLog("异常：${e.message}")
-            } finally {
-                cancelTimer.cancel()
-                _uiState.update { it.copy(screenCaptureLoading = false) }
+            } else {
+                updateLog("错误：未检测到照片生成 (超时)")
+                _uiState.update { it.copy(screenCaptureLoadingText = "拍照失败") }
             }
-        }
-    }
+
+        } catch (e: Exception) {  
+            updateLog("异常：${e.message}")  
+        } finally {  
+            cancelTimer.cancel()  
+            _uiState.update { it.copy(screenCaptureLoading = false) }  
+        }  
+    }  
+}
 
     fun cancelScreenCapture() {
         captureJob?.cancel()

@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Memory
@@ -86,7 +86,7 @@ fun FileManagerScreen(
                             RemoteFileType.Directory -> Icons.Outlined.Folder
                             RemoteFileType.Executable -> Icons.Outlined.Memory
                             RemoteFileType.Symlink -> Icons.Outlined.Link
-                            RemoteFileType.File -> Icons.Outlined.Article
+                            RemoteFileType.File -> Icons.AutoMirrored.Outlined.Article
                         },
                         contentDescription = null
                     )

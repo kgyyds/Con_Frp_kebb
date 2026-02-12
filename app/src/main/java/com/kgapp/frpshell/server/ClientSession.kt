@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.io.InputStream
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -78,6 +79,7 @@ class ClientSession(
     }
 
     suspend fun uploadFile(remotePath: String, localFile: File): Boolean {
+        if (!remotePath.startsWith("/")) return false
         if (!localFile.exists() || !localFile.isFile) return false
 
         return transferMutex.withLock {
@@ -86,8 +88,9 @@ class ClientSession(
                 val out = socket.getOutputStream()
 
                 sendMutex.withLock {
-                    out.write("upload $remotePath".toByteArray(StandardCharsets.UTF_8))
+                    out.write("upload $remotePath\n".toByteArray(StandardCharsets.UTF_8))
                     out.write(longToBigEndian(size))
+                    out.write(LINE_FEED.toInt())
                     localFile.inputStream().use { input ->
                         val buffer = ByteArray(FILE_CHUNK_SIZE)
                         while (true) {
@@ -104,17 +107,20 @@ class ClientSession(
     }
 
     suspend fun downloadFile(remotePath: String, targetFile: File): DownloadResult {
+        if (!remotePath.startsWith("/")) return DownloadResult.Failed
         return transferMutex.withLock {
             pauseReceiverForTransfer {
                 val input = socket.getInputStream()
                 val out = socket.getOutputStream()
 
                 sendMutex.withLock {
-                    out.write("download $remotePath".toByteArray(StandardCharsets.UTF_8))
+                    out.write("download $remotePath\n".toByteArray(StandardCharsets.UTF_8))
                     out.flush()
                 }
 
                 val sizeBytes = readExact(input, 8) ?: return@pauseReceiverForTransfer DownloadResult.Failed
+                val separator = input.read()
+                if (separator != LINE_FEED.toInt()) return@pauseReceiverForTransfer DownloadResult.Failed
                 val size = bigEndianToLong(sizeBytes)
                 if (size <= 0L) {
                     return@pauseReceiverForTransfer DownloadResult.NotFound
@@ -214,7 +220,7 @@ class ClientSession(
         return true
     }
 
-    private fun readExact(input: java.io.InputStream, size: Int): ByteArray? {
+    private fun readExact(input: InputStream, size: Int): ByteArray? {
         val out = ByteArray(size)
         var offset = 0
         while (offset < size) {
@@ -252,54 +258,6 @@ class ClientSession(
     companion object {
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
         private const val FILE_CHUNK_SIZE = 4096
-    }
-
-    private suspend fun writeCommand(command: String, appendErrorToOutput: Boolean): Boolean {
-        return sendMutex.withLock {
-            runCatching {
-                socket.getOutputStream().bufferedWriter().apply {
-                    write(command)
-                    newLine()
-                    flush()
-                }
-            }.onFailure {
-                if (appendErrorToOutput) {
-                    _output.value += "[send failed] ${it.message ?: "unknown"}\n"
-                }
-            }.isSuccess
-        }
-    }
-
-    private fun consumeManagedLine(line: String): Boolean {
-        val capture = activeCapture ?: return false
-
-        if (!capture.started) {
-            if (line == capture.beginMarker) {
-                capture.started = true
-                return true
-            }
-            return false
-        }
-
-        if (line == capture.endMarker) {
-            activeCapture = null
-            capture.result.complete(capture.buffer.toString())
-            return true
-        }
-
-        capture.buffer.append(line).append('\n')
-        return true
-    }
-
-    private data class CaptureState(
-        val beginMarker: String,
-        val endMarker: String,
-        val result: CompletableDeferred<String?>,
-        val buffer: StringBuilder = StringBuilder(),
-        var started: Boolean = false
-    )
-
-    companion object {
-        private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
+        private const val LINE_FEED: Byte = 0x0A
     }
 }

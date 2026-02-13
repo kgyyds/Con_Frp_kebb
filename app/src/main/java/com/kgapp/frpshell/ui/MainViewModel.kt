@@ -493,9 +493,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             updateLog("发送拍照指令 (camera_id=$cameraId)...")  
 
             
+            val cmd = """(sh -c "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1 < /dev/null" &)"""          
                       
-                      
-            val cmd = "nohup sh -c \"CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1 &\""
+            
 
             // Fire and forget
             session.runManagedCommand(cmd)  
@@ -521,7 +521,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             // --- 4️⃣ 下载照片 ---
             if (photoExists) {
+                
                 _uiState.update { it.copy(screenCaptureLoadingText = "拍照成功，准备获取照片...") }  
+                
+                kotlinx.coroutines.delay(3000) // 等待 shell 输出稳定
+                
                 updateLog("开始下载照片...")  
 
                 val cacheFile = File(getApplication<Application>().cacheDir, "photo_${System.currentTimeMillis()}.jpg")  

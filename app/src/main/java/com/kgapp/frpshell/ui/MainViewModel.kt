@@ -378,11 +378,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 
                 FrpLogBus.append("[screen] capturing...")
                 // 1. Send screencap command
-                session.runManagedCommand("screencap -j /data/local/tmp/tmp.jpg")
+                session.runManagedCommand("screencap -p /data/local/tmp/tmp.png")
                 
                 // 2. Download the file
-                val remotePath = "/data/local/tmp/tmp.jpg"
-                val cacheFile = File(getApplication<Application>().cacheDir, "screen_${System.currentTimeMillis()}.jpg")
+                val remotePath = "/data/local/tmp/tmp.png"
+                val cacheFile = File(getApplication<Application>().cacheDir, "screen_${System.currentTimeMillis()}.png")
                 
                 // Don't show regular file transfer dialog
                 // beginTransfer("获取截图中...") 
@@ -400,7 +400,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                      FrpLogBus.append("[screen] capture success")
                      
                      // Clean up remote file
-                     session.runManagedCommand("rm /data/local/tmp/tmp.jpg")
+                     session.runManagedCommand("rm /data/local/tmp/tmp.png")
                 } else {
                      FrpLogBus.append("[screen] capture failed: download error")
                 }

@@ -31,7 +31,7 @@ object TcpServer {
 
     fun start(port: Int) {
         if (listeningPort == port && serverSocket != null) {
-            FrpLogBus.append("[tcp] listener already running on $port")
+            FrpLogBus.append("[TCP] 监听器已在端口 $port 运行")
             return
         }
 
@@ -45,7 +45,7 @@ object TcpServer {
             runCatching {
                 ServerSocket(port).use { server ->
                     serverSocket = server
-                    FrpLogBus.append("[tcp] listening on 127.0.0.1:$port")
+                    FrpLogBus.append("[TCP] 已开始监听 127.0.0.1:$port")
                     while (true) {
                         val socket = server.accept()
                         val id = "${socket.inetAddress.hostAddress}:${socket.port}"
@@ -58,13 +58,13 @@ object TcpServer {
                         )
                         sessions[id] = session
                         _clientIds.value = sessions.keys.sorted()
-                        FrpLogBus.append("[tcp] client connected: $id")
+                        FrpLogBus.append("[TCP] 客户端已连接：$id")
                         session.start()
                     }
                 }
             }.onFailure { error ->
                 if (error !is SocketException) {
-                    FrpLogBus.append("[tcp] listener stopped: ${error.message ?: "unknown"}")
+                    FrpLogBus.append("[TCP] 监听器停止：${error.message ?: "未知错误"}")
                 }
             }
         }
@@ -89,7 +89,7 @@ object TcpServer {
         val removed = sessions.remove(id)
         if (removed != null) {
             _clientIds.value = sessions.keys.sorted()
-            FrpLogBus.append("[tcp] client disconnected: $id")
+            FrpLogBus.append("[TCP] 客户端已断开：$id")
         }
     }
 }

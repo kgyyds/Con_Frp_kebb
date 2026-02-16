@@ -18,49 +18,6 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.security.MessageDigest
 
-enum class ScreenDestination {
-    Main,
-    Settings
-}
-
-
-data class MainUiState(
-    val selectedTarget: ShellTarget = ShellTarget.FrpLog,
-    val clientIds: List<String> = emptyList(),
-    val screen: ScreenDestination = ScreenDestination.Main,
-    val configContent: String = "",
-    val firstLaunchFlow: Boolean = false,
-    val suAvailable: Boolean = false,
-    val useSu: Boolean = false,
-    val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val localPort: Int = 23231,
-    val shellFontSizeSp: Float = SettingsStore.DEFAULT_FONT_SIZE_SP,
-    val frpRunning: Boolean = false,
-    val fileManagerVisible: Boolean = false,
-    val fileManagerClientId: String? = null,
-    val fileManagerPath: String = "/",
-    val fileManagerFiles: List<RemoteFileItem> = emptyList(),
-    val fileEditorVisible: Boolean = false,
-    val fileEditorRemotePath: String = "",
-    val fileEditorCachePath: String = "",
-    val fileEditorOriginalContent: String = "",
-    val fileEditorContent: String = "",
-    val fileEditorConfirmDiscardVisible: Boolean = false,
-    val fileTransferVisible: Boolean = false,
-    val fileTransferTitle: String = "",
-    val fileTransferDone: Long = 0L,
-    val fileTransferTotal: Long = 0L,
-    val screenViewerVisible: Boolean = false,
-    val screenViewerImagePath: String = "",
-    val screenViewerTimestamp: Long = 0L,
-    val screenCaptureLoading: Boolean = false,
-    val screenCaptureLoadingText: String = "正在截屏...",
-    val screenCaptureLog: String = "",
-    val screenCaptureCancelable: Boolean = false,
-    val cameraSelectorVisible: Boolean = false,
-    val clientModels: Map<String, String> = emptyMap()
-)
-
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val frpManager = FrpManager(application.applicationContext, viewModelScope)
     private val settingsStore = SettingsStore(application.applicationContext)
@@ -77,10 +34,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val jarFile = File(context.filesDir, "scrcpy-server.jar")
             // Ensure file exists and is not empty
             if (!jarFile.exists() || jarFile.length() == 0L) {
-                FrpLogBus.append("[init] extracting scrcpy-server.jar to files dir...")
+                FrpLogBus.append("[初始化] 正在提取 scrcpy-server.jar 到应用目录...")
                 copyAssetToFile(context, "scrcpy-server.jar", jarFile)
             } else {
-                FrpLogBus.append("[init] scrcpy-server.jar ready in files dir")
+                FrpLogBus.append("[初始化] scrcpy-server.jar 已就绪")
             }
         }
 
@@ -167,7 +124,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             if (configExists) {
                 if (useSuDefault && !suAvailable) {
-                    FrpLogBus.append("[settings] su enabled but unavailable, start may fail")
+                    FrpLogBus.append("[设置] 已开启 su 但当前不可用，启动可能失败")
                 }
                 frpManager.start(useSuDefault)
             }
@@ -181,9 +138,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     input.copyTo(output)
                 }
             }
-            FrpLogBus.append("[system] asset $assetName extracted success")
+            FrpLogBus.append("[系统] 资源文件 $assetName 提取成功")
         } catch (e: Exception) {
-            FrpLogBus.append("[init] failed to copy asset $assetName: ${e.message}")
+            FrpLogBus.append("[初始化] 复制资源文件 $assetName 失败：${e.message}")
         }
     }
 
@@ -232,7 +189,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main, localPort = localPort, selectedTarget = ShellTarget.FrpLog)
         }
-        FrpLogBus.append("[settings] saved (useSu=${state.useSu}, theme=${state.themeMode}, localPort=$localPort, font=${state.shellFontSizeSp})")
+        FrpLogBus.append("[设置] 保存完成 (useSu=${state.useSu}, theme=${state.themeMode}, localPort=$localPort, font=${state.shellFontSizeSp})")
     }
 
     fun saveAndRestartFrp() {
@@ -251,7 +208,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             if (state.useSu && !state.suAvailable) {
-                FrpLogBus.append("[settings] su enabled but unavailable, start may fail")
+                FrpLogBus.append("[设置] 已开启 su 但当前不可用，启动可能失败")
             }
             frpManager.restart(state.useSu)
         }
@@ -261,7 +218,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         viewModelScope.launch {
             if (state.useSu && !state.suAvailable) {
-                FrpLogBus.append("[settings] su enabled but unavailable, start may fail")
+                FrpLogBus.append("[设置] 已开启 su 但当前不可用，启动可能失败")
             }
             frpManager.start(state.useSu)
         }
@@ -336,7 +293,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         if (!state.fileEditorVisible) return
         if (sha256(state.fileEditorContent) == sha256(state.fileEditorOriginalContent)) {
-            FrpLogBus.append("[editor] no changes, skip upload")
+            FrpLogBus.append("[编辑器] 内容未变化，跳过上传")
             return
         }
 
@@ -352,10 +309,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             endTransfer()
             if (ok) {
                 _uiState.update { it.copy(fileEditorOriginalContent = it.fileEditorContent, fileEditorConfirmDiscardVisible = false) }
-                FrpLogBus.append("[editor] upload success: ${state.fileEditorRemotePath}")
+                FrpLogBus.append("[编辑器] 上传成功：${state.fileEditorRemotePath}")
                 refreshCurrentDirectory()
             } else {
-                FrpLogBus.append("[editor] upload failed: ${state.fileEditorRemotePath}")
+                FrpLogBus.append("[编辑器] 上传失败：${state.fileEditorRemotePath}")
             }
         }
     }
@@ -364,51 +321,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
         if (_uiState.value.screenCaptureLoading) return
 
-        captureJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(screenCaptureLoading = true, screenCaptureCancelable = false, screenCaptureLoadingText = "正在截屏...") }
-
-            // Delay 4 seconds before showing cancel button
-            val cancelTimer = launch {
-                kotlinx.coroutines.delay(4000)
-                _uiState.update { it.copy(screenCaptureCancelable = true) }
-            }
-
-            try {
-                val session = TcpServer.getClient(target.id) ?: return@launch
-                
-                FrpLogBus.append("[screen] capturing...")
-                // 1. Send screencap command
-                session.runManagedCommand("screencap -p /data/local/tmp/tmp.png")
-                
-                // 2. Download the file
-                val remotePath = "/data/local/tmp/tmp.png"
-                val cacheFile = File(getApplication<Application>().cacheDir, "screen_${System.currentTimeMillis()}.png")
-                
-                // Don't show regular file transfer dialog
-                // beginTransfer("获取截图中...") 
-                val result = session.downloadFile(remotePath, cacheFile)
-                // endTransfer()
-                
-                if (result == ClientSession.DownloadResult.Success) {
-                     _uiState.update { 
-                         it.copy(
-                             screenViewerVisible = true, 
-                             screenViewerImagePath = cacheFile.absolutePath,
-                             screenViewerTimestamp = System.currentTimeMillis()
-                         )
-                     }
-                     FrpLogBus.append("[screen] capture success")
-                     
-                     // Clean up remote file
-                     session.runManagedCommand("rm /data/local/tmp/tmp.png")
-                } else {
-                     FrpLogBus.append("[screen] capture failed: download error")
-                }
-            } finally {
-                cancelTimer.cancel()
-                _uiState.update { it.copy(screenCaptureLoading = false) }
-            }
-        }
+        captureJob = launchScreenCaptureJob(
+            scope = viewModelScope,
+            uiState = _uiState,
+            targetId = target.id,
+            getSession = TcpServer::getClient,
+            cacheDir = getApplication<Application>().cacheDir
+        )
     }
 
     fun openCameraSelector() {
@@ -419,154 +338,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(cameraSelectorVisible = false) }
     }
 
-    fun takePhoto(cameraId: Int) {  
-    val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return  
-    if (_uiState.value.screenCaptureLoading) return  
-    closeCameraSelector()  
+    fun takePhoto(cameraId: Int) {
+        val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
+        if (_uiState.value.screenCaptureLoading) return
+        closeCameraSelector()
 
-    captureJob = viewModelScope.launch(Dispatchers.IO) {  
-        _uiState.update { it.copy(screenCaptureLoading = true, screenCaptureCancelable = false, screenCaptureLoadingText = "准备中...", screenCaptureLog = "") }  
-
-        val cancelTimer = launch {  
-            kotlinx.coroutines.delay(4000)  
-            _uiState.update { it.copy(screenCaptureCancelable = true) }  
-        }  
-          
-        fun updateLog(msg: String) {  
-            _uiState.update { it.copy(screenCaptureLog = msg) }  
-        }  
-
-        try {  
-            val session = TcpServer.getClient(target.id) ?: return@launch  
-              
-            // --- 1️⃣ 检查和上传 jar 部分保持不动 ---
-            _uiState.update { it.copy(screenCaptureLoadingText = "正在检查远程组件...") }  
-
-            val context = getApplication<Application>()  
-            val localJar = File(context.filesDir, "scrcpy-server.jar")  
-
-            if (!localJar.exists() || localJar.length() == 0L) {  
-                copyAssetToFile(context, "scrcpy-server.jar", localJar)  
-            }  
-
-            if (!localJar.exists() || localJar.length() == 0L) {  
-                _uiState.update { it.copy(screenCaptureLoadingText = "本地组件缺失，无法继续") }  
-                updateLog("错误：本地组件文件丢失")  
-                return@launch  
-            }  
-
-            val checkCmd = "if [ -f /data/local/tmp/scrcpy-server.jar ]; then echo 'exists'; else echo 'missing'; fi"  
-            val checkResult = session.runManagedCommand(checkCmd)?.trim()  
-            val toolExists = checkResult?.contains("exists") == true  
-
-            if (!toolExists) {  
-                 _uiState.update { it.copy(screenCaptureLoadingText = "远程组件缺失，准备上传...") }  
-                 updateLog("正在上传 scrcpy-server.jar...")  
-
-                 val ok = session.uploadFile("/data/local/tmp/scrcpy-server.jar", localJar) { done, total ->  
-                     val percent = if (total > 0) (done * 100 / total).toInt() else 0  
-                     _uiState.update { it.copy(screenCaptureLoadingText = "正在上传组件: $percent%") }  
-                 }  
-                   
-                 if (!ok) {  
-                     updateLog("错误：文件上传失败")  
-                     _uiState.update { it.copy(screenCaptureLoadingText = "组件上传失败") }  
-                     return@launch  
-                 }  
-                   
-                 session.runManagedCommand("chmod 777 /data/local/tmp/scrcpy-server.jar")  
-            } else {  
-                 updateLog("远程组件检查通过")  
-                 _uiState.update { it.copy(screenCaptureLoadingText = "组件检查通过") }  
-            }  
-
-            val verifyCmd = "ls -l /data/local/tmp/scrcpy-server.jar"  
-            val verifyResult = session.runManagedCommand(verifyCmd)  
-            if (verifyResult == null || !verifyResult.contains("scrcpy-server.jar")) {  
-                 updateLog("错误：组件校验失败，远程文件不可见")  
-                 _uiState.update { it.copy(screenCaptureLoadingText = "组件校验失败") }  
-                 return@launch  
-            }  
-
-            // --- 2️⃣ 改动：拍照执行方式 ---
-            _uiState.update { it.copy(screenCaptureLoadingText = "正在执行拍照指令...") }  
-            updateLog("发送拍照指令 (camera_id=$cameraId)...")  
-
-            
-            val cmd = """(sh -c "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1 < /dev/null" &)"""          
-                      
-            
-
-            // Fire and forget
-            session.runManagedCommand(cmd)  
-
-            updateLog("等待照片生成 (轮询)...")  
-
-            // --- 3️⃣ 改动：每隔1秒轮询照片是否生成 ---
-            val remotePath = "/data/local/tmp/scrcpy_test.jpg"
-            val pollInterval = 1000L
-            val timeoutMs = 30_000L
-            val startTime = System.currentTimeMillis()
-            var photoExists = false
-
-            while (System.currentTimeMillis() - startTime < timeoutMs) {
-                val checkPhotoCmd = "ls $remotePath 2>/dev/null || true"
-                val result = session.runManagedCommand(checkPhotoCmd, timeoutMs = 2000)?.trim()
-                if (result != null && result.contains(remotePath)) {
-                    photoExists = true
-                    break
-                }
-                kotlinx.coroutines.delay(pollInterval)
-            }
-
-            // --- 4️⃣ 下载照片 ---
-            if (photoExists) {
-                
-                _uiState.update { it.copy(screenCaptureLoadingText = "拍照成功，准备获取照片...") }  
-                
-                kotlinx.coroutines.delay(3000) // 等待 shell 输出稳定
-                
-                updateLog("开始下载照片...")  
-
-                val cacheFile = File(getApplication<Application>().cacheDir, "photo_${System.currentTimeMillis()}.jpg")  
-
-                val result = session.downloadFile(remotePath, cacheFile) { done, total ->
-                    val percent = if (total > 0) (done * 100 / total).toInt() else 0
-                    _uiState.update { it.copy(screenCaptureLoadingText = "正在下载照片: $percent%") }
-                }
-
-                if (result == ClientSession.DownloadResult.Success) {
-                    updateLog("下载完成")
-                    _uiState.update {   
-                        it.copy(
-                            screenViewerVisible = true,   
-                            screenViewerImagePath = cacheFile.absolutePath,  
-                            screenViewerTimestamp = System.currentTimeMillis()  
-                        )  
-                    }
-                    session.runManagedCommand("rm $remotePath")
-                } else {
-                    updateLog("错误：照片下载失败")
-                    _uiState.update { it.copy(screenCaptureLoadingText = "下载失败") }
-                }
-            } else {
-                updateLog("错误：未检测到照片生成 (超时)")
-                _uiState.update { it.copy(screenCaptureLoadingText = "拍照失败") }
-            }
-
-        } catch (e: Exception) {  
-            updateLog("异常：${e.message}")  
-        } finally {  
-            cancelTimer.cancel()  
-            _uiState.update { it.copy(screenCaptureLoading = false) }  
-        }  
-    }  
-}
+        captureJob = launchCameraPhotoCaptureJob(
+            scope = viewModelScope,
+            uiState = _uiState,
+            targetId = target.id,
+            cameraId = cameraId,
+            getSession = TcpServer::getClient,
+            appContext = getApplication<Application>(),
+            copyAssetToFile = ::copyAssetToFile
+        )
+    }
 
     fun cancelScreenCapture() {
         captureJob?.cancel()
         _uiState.update { it.copy(screenCaptureLoading = false) }
-        FrpLogBus.append("[screen] capture cancelled by user")
+        FrpLogBus.append("[截图] 用户取消了截图任务")
     }
 
     fun closeScreenViewer() {
@@ -645,13 +436,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun uploadLocalFileToCurrentDirectory(localFile: File, fileName: String) {
         if (!localFile.exists() || !localFile.isFile) {
-            FrpLogBus.append("[file-manager] local file missing: ${localFile.absolutePath}")
+            FrpLogBus.append("[文件管理] 本地文件不存在：${localFile.absolutePath}")
             return
         }
 
         val cleanName = fileName.trim()
         if (cleanName.isBlank()) {
-            FrpLogBus.append("[file-manager] invalid upload file name")
+            FrpLogBus.append("[文件管理] 上传文件名无效")
             return
         }
 
@@ -664,10 +455,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             endTransfer()
             if (ok) {
-                FrpLogBus.append("[file-manager] upload success: $remotePath")
+                FrpLogBus.append("[文件管理] 上传成功：$remotePath")
                 refreshCurrentDirectory()
             } else {
-                FrpLogBus.append("[file-manager] upload failed: $remotePath")
+                FrpLogBus.append("[文件管理] 上传失败：$remotePath")
             }
         }
     }
@@ -682,9 +473,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         when (session.downloadFile(remotePath, cacheFile) { done, total ->
             reportTransfer(done, total)
         }) {
-            ClientSession.DownloadResult.Success -> FrpLogBus.append("[file-manager] download success: $remotePath -> ${cacheFile.absolutePath}")
-            ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[file-manager] remote file not found: $remotePath")
-            ClientSession.DownloadResult.Failed -> FrpLogBus.append("[file-manager] download failed: $remotePath")
+            ClientSession.DownloadResult.Success -> FrpLogBus.append("[文件管理] 下载成功：$remotePath -> ${cacheFile.absolutePath}")
+            ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[文件管理] 远程文件不存在：$remotePath")
+            ClientSession.DownloadResult.Failed -> FrpLogBus.append("[文件管理] 下载失败：$remotePath")
         }
         endTransfer()
     }
@@ -703,9 +494,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             when (session.downloadFile(remotePath, localFile) { done, total ->
                 reportTransfer(done, total)
             }) {
-                ClientSession.DownloadResult.Success -> FrpLogBus.append("[file-manager] download success: $remotePath -> ${localFile.absolutePath}")
-                ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[file-manager] remote file not found: $remotePath")
-                ClientSession.DownloadResult.Failed -> FrpLogBus.append("[file-manager] download failed: $remotePath")
+                ClientSession.DownloadResult.Success -> FrpLogBus.append("[文件管理] 下载成功：$remotePath -> ${localFile.absolutePath}")
+                ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[文件管理] 远程文件不存在：$remotePath")
+                ClientSession.DownloadResult.Failed -> FrpLogBus.append("[文件管理] 下载失败：$remotePath")
             }
             endTransfer()
         }
@@ -733,15 +524,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         fileEditorConfirmDiscardVisible = false
                     )
                 }
-                FrpLogBus.append("[editor] download success: $remotePath")
+                FrpLogBus.append("[编辑器] 下载成功：$remotePath")
             }
 
             ClientSession.DownloadResult.NotFound -> {
-                FrpLogBus.append("[editor] remote file not found: $remotePath")
+                FrpLogBus.append("[编辑器] 远程文件不存在：$remotePath")
             }
 
             ClientSession.DownloadResult.Failed -> {
-                FrpLogBus.append("[editor] download failed: $remotePath")
+                FrpLogBus.append("[编辑器] 下载失败：$remotePath")
             }
         }
         endTransfer()
@@ -769,7 +560,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun executeFileManagerCommandAndGetOutput(command: String): String? {
         val session = currentFileManagerSession() ?: return null
         return session.runManagedCommand(command).also {
-            if (it == null) FrpLogBus.append("[file-manager] command failed: $command")
+            if (it == null) FrpLogBus.append("[文件管理] 命令执行失败：$command")
         }
     }
 
@@ -780,8 +571,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun resolveLocalPort(config: String): Int {
         val parsed = FrpManager.parseLocalPort(config)
-        if (parsed == null) FrpLogBus.append("[config] localPort not found, fallback to $DEFAULT_LOCAL_PORT")
-        else FrpLogBus.append("[config] localPort=$parsed")
+        if (parsed == null) FrpLogBus.append("[配置] 未找到 localPort，使用默认值 $DEFAULT_LOCAL_PORT")
+        else FrpLogBus.append("[配置] localPort=$parsed")
         return parsed ?: DEFAULT_LOCAL_PORT
     }
 

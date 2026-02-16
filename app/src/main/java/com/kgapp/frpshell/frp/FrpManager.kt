@@ -41,15 +41,15 @@ class FrpManager(
 
     fun start(useSu: Boolean) {
         if (_running.value) {
-            FrpLogBus.append("[frp] already running")
+            FrpLogBus.append("[FRP] 已在运行")
             return
         }
         if (!configExists()) {
-            FrpLogBus.append("[frp] frpc.toml not found")
+            FrpLogBus.append("[FRP] 未找到 frpc.toml 配置文件")
             return
         }
         if (!ensureFrpcBinaryReady()) {
-            FrpLogBus.append("[frp] frpc not executable")
+            FrpLogBus.append("[FRP] frpc 不可执行")
             return
         }
 
@@ -68,7 +68,7 @@ class FrpManager(
             val started = ProcessBuilder(command).start()
             process = started
             _running.value = true
-            FrpLogBus.append("[frp] started (useSu=$useSu)")
+            FrpLogBus.append("[FRP] 启动成功 (useSu=$useSu)")
 
             stdoutJob?.cancel()
             stderrJob?.cancel()
@@ -78,7 +78,7 @@ class FrpManager(
                 started.inputStream.bufferedReader().forEachLine { FrpLogBus.append(it) }
             }
             stderrJob = scope.launch(Dispatchers.IO) {
-                started.errorStream.bufferedReader().forEachLine { FrpLogBus.append("[err] $it") }
+                started.errorStream.bufferedReader().forEachLine { FrpLogBus.append("[FRP错误] $it") }
             }
             monitorJob = scope.launch(Dispatchers.IO) {
                 val code = runCatching { started.waitFor() }.getOrDefault(-1)
@@ -86,17 +86,17 @@ class FrpManager(
                 if (process == started) {
                     process = null
                 }
-                FrpLogBus.append("[frp] exited with code $code")
+                FrpLogBus.append("[FRP] 进程退出，退出码 $code")
             }
         }.onFailure {
             _running.value = false
-            FrpLogBus.append("[frp] failed (useSu=$useSu): ${it.message ?: "unknown"}")
+            FrpLogBus.append("[FRP] 启动失败 (useSu=$useSu)：${it.message ?: "未知错误"}")
         }
     }
 
     suspend fun stop() {
         if (!_running.value && process == null) {
-            FrpLogBus.append("[frp] already stopped")
+            FrpLogBus.append("[FRP] 已停止")
             return
         }
         process?.destroy()
@@ -108,7 +108,7 @@ class FrpManager(
         stderrJob = null
         monitorJob = null
         _running.value = false
-        FrpLogBus.append("[frp] stopped")
+        FrpLogBus.append("[FRP] 已停止运行")
     }
 
     private fun ensureFrpcBinaryReady(): Boolean {
@@ -143,11 +143,11 @@ class FrpManager(
             .filter { it.matches(Regex("\\d+")) }
 
         if (pids.isEmpty()) {
-            FrpLogBus.append("[frp] no residual frpc process found")
+            FrpLogBus.append("[FRP] 未发现残留 frpc 进程")
             return
         }
 
-        FrpLogBus.append("[frp] residual frpc process found: ${pids.joinToString(",")}")
+        FrpLogBus.append("[FRP] 发现残留 frpc 进程：${pids.joinToString(",")}")
 
         val killResult = runCatching {
             ProcessBuilder("su", "-c", "kill ${pids.joinToString(" ")}").start().waitFor()
@@ -157,7 +157,7 @@ class FrpManager(
             ProcessBuilder("su", "-c", "kill -9 ${pids.joinToString(" ")}").start().waitFor()
         }
 
-        FrpLogBus.append("[frp] residual frpc cleanup finished")
+        FrpLogBus.append("[FRP] 残留 frpc 进程清理完成")
     }
 
     private fun runCommandWithOutput(command: List<String>): String {

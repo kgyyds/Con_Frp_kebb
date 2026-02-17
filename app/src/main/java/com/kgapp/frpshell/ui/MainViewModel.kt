@@ -3,12 +3,20 @@ package com.kgapp.frpshell.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kgapp.frpshell.core.AppCommand
+import com.kgapp.frpshell.core.CommandDispatcherThread
+import com.kgapp.frpshell.core.FrpCommand
+import com.kgapp.frpshell.core.FrpEvent
+import com.kgapp.frpshell.core.FrpManagerThread
+import com.kgapp.frpshell.core.NetCommand
+import com.kgapp.frpshell.core.NetEvent
+import com.kgapp.frpshell.core.NetworkThread
 import com.kgapp.frpshell.frp.FrpLogBus
 import com.kgapp.frpshell.frp.FrpManager
 import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.server.ClientSession
-import com.kgapp.frpshell.server.TcpServer
 import com.kgapp.frpshell.ui.theme.ThemeMode
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +27,10 @@ import java.io.File
 import java.security.MessageDigest
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    private val frpManager = FrpManager(application.applicationContext, viewModelScope)
+    private val frpThread = FrpManagerThread(application.applicationContext)
+    private val networkThread = NetworkThread()
+    private val dispatcher = CommandDispatcherThread(networkThread, frpThread)
+    private val frpManager = frpThread.manager()
     private val settingsStore = SettingsStore(application.applicationContext)
 
     private val _uiState = MutableStateFlow(MainUiState())
@@ -43,15 +54,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             val requestedIds = mutableSetOf<String>()
-            TcpServer.clientIds.collect { ids ->
+            networkThread.events.collect { event ->
+                if (event is NetEvent.ClientOutput) {
+                    _uiState.update { it.copy(clientOutputs = it.clientOutputs + (event.clientId to event.output)) }
+                    return@collect
+                }
+
+                if (event !is NetEvent.ClientsChanged) return@collect
+                val ids = event.clientIds
                 requestedIds.retainAll(ids.toSet())
 
                 ids.forEach { id ->
                     if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
                         requestedIds.add(id)
                         launch(Dispatchers.IO) {
-                            val session = TcpServer.getClient(id)
-                            val result = session?.runManagedCommand("getprop ro.product.model")
+                            val result = runManagedCommand(id, "getprop ro.product.model")
                             val model = result?.lines()?.firstOrNull()?.trim()
                             if (!model.isNullOrBlank()) {
                                 _uiState.update { it.copy(clientModels = it.clientModels + (id to model)) }
@@ -70,10 +87,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val editorAlive = state.fileEditorVisible && state.fileManagerClientId in ids
                     
                     val validModels = state.clientModels.filterKeys { it in ids }
+                    val validOutputs = state.clientOutputs.filterKeys { it in ids }
 
                     state.copy(
                         clientIds = ids,
                         clientModels = validModels,
+                        clientOutputs = validOutputs,
                         selectedTarget = safeTarget,
                         fileManagerVisible = managerAlive,
                         fileEditorVisible = editorAlive,
@@ -84,8 +103,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            frpManager.running.collect { running ->
-                _uiState.update { it.copy(frpRunning = running) }
+            frpThread.events.collect { event ->
+                if (event is FrpEvent.RunningChanged) {
+                    _uiState.update { it.copy(frpRunning = event.running) }
+                }
             }
         }
 
@@ -120,13 +141,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            TcpServer.start(localPort)
+            networkThread.post(NetCommand.StartServer(localPort))
 
             if (configExists) {
                 if (useSuDefault && !suAvailable) {
                     FrpLogBus.append("[设置] 已开启 su 但当前不可用，启动可能失败")
                 }
-                frpManager.start(useSuDefault)
+                frpThread.post(FrpCommand.Start(useSuDefault))
             }
         }
     }
@@ -146,6 +167,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onSelectTarget(target: ShellTarget) {
         _uiState.update { it.copy(selectedTarget = target) }
+        dispatcher.post(AppCommand.SelectClient((target as? ShellTarget.Client)?.id))
     }
 
     fun onConfigChanged(content: String) {
@@ -184,7 +206,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
 
         val localPort = resolveLocalPort(state.configContent)
-        TcpServer.start(localPort)
+        networkThread.post(NetCommand.StartServer(localPort))
 
         _uiState.update {
             it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main, localPort = localPort, selectedTarget = ShellTarget.FrpLog)
@@ -200,7 +222,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
 
         val localPort = resolveLocalPort(state.configContent)
-        TcpServer.start(localPort)
+        networkThread.post(NetCommand.StartServer(localPort))
 
         _uiState.update {
             it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main, localPort = localPort, selectedTarget = ShellTarget.FrpLog)
@@ -210,7 +232,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (state.useSu && !state.suAvailable) {
                 FrpLogBus.append("[设置] 已开启 su 但当前不可用，启动可能失败")
             }
-            frpManager.restart(state.useSu)
+            frpThread.post(FrpCommand.Restart(state.useSu))
         }
     }
 
@@ -220,18 +242,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (state.useSu && !state.suAvailable) {
                 FrpLogBus.append("[设置] 已开启 su 但当前不可用，启动可能失败")
             }
-            frpManager.start(state.useSu)
+            dispatcher.post(AppCommand.StartFrp(state.useSu))
         }
     }
 
     fun stopFrp() {
-        viewModelScope.launch { frpManager.stop() }
+        dispatcher.post(AppCommand.StopFrp)
     }
 
     fun sendCommand(command: String) {
         val target = _uiState.value.selectedTarget
         if (target is ShellTarget.Client) {
-            TcpServer.getClient(target.id)?.send(command)
+            dispatcher.post(AppCommand.SendShell(target.id, command))
         }
     }
 
@@ -325,7 +347,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             scope = viewModelScope,
             uiState = _uiState,
             targetId = target.id,
-            getSession = TcpServer::getClient,
+            getSession = ::currentSession,
             cacheDir = getApplication<Application>().cacheDir
         )
     }
@@ -348,7 +370,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uiState = _uiState,
             targetId = target.id,
             cameraId = cameraId,
-            getSession = TcpServer::getClient,
+            getSession = ::currentSession,
             appContext = getApplication<Application>(),
             copyAssetToFile = ::copyAssetToFile
         )
@@ -566,7 +588,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun currentFileManagerSession(): ClientSession? {
         val clientId = _uiState.value.fileManagerClientId ?: return null
-        return TcpServer.getClient(clientId)
+        return currentSession(clientId)
+    }
+
+    private fun currentSession(clientId: String): ClientSession? = networkThread.currentSession(clientId)
+
+    private suspend fun runManagedCommand(clientId: String, command: String, timeoutMs: Long = 10_000L): String? {
+        val deferred = CompletableDeferred<String?>()
+        networkThread.post(NetCommand.RunManaged(clientId, command, timeoutMs, deferred))
+        return deferred.await()
     }
 
     private fun resolveLocalPort(config: String): Int {
@@ -595,7 +625,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        TcpServer.stopAll()
+        networkThread.close()
     }
 
     companion object {

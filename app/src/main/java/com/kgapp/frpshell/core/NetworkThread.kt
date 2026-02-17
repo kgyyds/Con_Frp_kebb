@@ -1,0 +1,101 @@
+package com.kgapp.frpshell.core
+
+import com.kgapp.frpshell.frp.FrpLogBus
+import com.kgapp.frpshell.server.TcpServer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+
+/**
+ * 网络角色线程：唯一负责 TCP 监听、客户端命令与 shell 数据收发。
+ */
+class NetworkThread {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+    private val commandChannel = Channel<NetCommand>(Channel.UNLIMITED)
+
+    private val _events = MutableSharedFlow<NetEvent>(extraBufferCapacity = 128)
+    val events: SharedFlow<NetEvent> = _events.asSharedFlow()
+
+    private val outputJobs = mutableMapOf<String, Job>()
+
+    init {
+        scope.launch {
+            TcpServer.clientIds.collect { ids ->
+                _events.emit(NetEvent.ClientsChanged(ids))
+                syncOutputCollectors(ids)
+            }
+        }
+
+        scope.launch {
+            for (command in commandChannel) {
+                handleCommand(command)
+            }
+        }
+    }
+
+    fun post(command: NetCommand) {
+        commandChannel.trySend(command)
+    }
+
+    fun currentSession(clientId: String): com.kgapp.frpshell.server.ClientSession? = TcpServer.getClient(clientId)
+
+    private suspend fun handleCommand(command: NetCommand) {
+        when (command) {
+            is NetCommand.StartServer -> TcpServer.start(command.port)
+            NetCommand.StopServer -> TcpServer.stopAll()
+            is NetCommand.SendShell -> TcpServer.getClient(command.clientId)?.send(command.command)
+            is NetCommand.RunManaged -> {
+                val result = TcpServer.getClient(command.clientId)
+                    ?.runManagedCommand(command.command, command.timeoutMs)
+                command.result.complete(result)
+            }
+
+            is NetCommand.UploadFile -> {
+                val result = TcpServer.getClient(command.clientId)
+                    ?.uploadFile(command.remotePath, command.localFile, command.progress)
+                    ?: false
+                command.result.complete(result)
+            }
+
+            is NetCommand.DownloadFile -> {
+                val result = TcpServer.getClient(command.clientId)
+                    ?.downloadFile(command.remotePath, command.targetFile, command.progress)
+                    ?: com.kgapp.frpshell.server.ClientSession.DownloadResult.Failed
+                command.result.complete(result)
+            }
+        }
+    }
+
+    private fun syncOutputCollectors(ids: List<String>) {
+        val activeIds = ids.toSet()
+
+        outputJobs.keys.filterNot { it in activeIds }.toList().forEach { staleId ->
+            outputJobs.remove(staleId)?.cancel()
+        }
+
+        ids.forEach { id ->
+            if (outputJobs.containsKey(id)) return@forEach
+            val session = TcpServer.getClient(id) ?: return@forEach
+            outputJobs[id] = scope.launch {
+                session.output.collect { text ->
+                    _events.emit(NetEvent.ClientOutput(id, text))
+                }
+            }
+        }
+    }
+
+    fun close() {
+        FrpLogBus.append("[网络线程] 正在停止")
+        outputJobs.values.forEach { it.cancel() }
+        outputJobs.clear()
+        TcpServer.stopAll()
+        scope.cancel()
+    }
+}

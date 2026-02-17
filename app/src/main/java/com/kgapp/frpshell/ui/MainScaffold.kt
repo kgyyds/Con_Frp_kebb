@@ -251,6 +251,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             modifier = Modifier.fillMaxSize(),
                             target = uiState.selectedTarget,
                             fontSizeSp = uiState.shellFontSizeSp,
+                            output = (uiState.selectedTarget as? ShellTarget.Client)?.let { uiState.clientOutputs[it.id] } ?: "",
                             frpRunning = uiState.frpRunning,
                             onStartFrp = vm::startFrp,
                             onStopFrp = vm::stopFrp,

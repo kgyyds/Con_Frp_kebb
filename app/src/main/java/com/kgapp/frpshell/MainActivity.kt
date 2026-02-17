@@ -1,13 +1,16 @@
 package com.kgapp.frpshell
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import com.kgapp.frpshell.ui.MainScaffold
+import com.kgapp.frpshell.frp.FrpLogBus
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i("FrpShellCompose", "MainActivity setContent 开始")
+        FrpLogBus.append("[UI] MainActivity setContent 开始")
         setContent {
             App()
         }

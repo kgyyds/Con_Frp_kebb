@@ -22,7 +22,6 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
-import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -54,6 +53,9 @@ class ClientSession(
 
     @Volatile
     private var transferContext: TransferContext? = null
+
+    @Volatile
+    private var uploadResponse: CompletableDeferred<Boolean>? = null
 
     fun start() {
         startReceiver()
@@ -99,31 +101,70 @@ class ClientSession(
             val total = localFile.length()
             onProgress?.invoke(0L, total)
 
-            val escapedPath = shellEscape(safeRemotePath)
-            val truncateResult = runManagedCommand(": > '$escapedPath'", timeoutMs = DEFAULT_MANAGED_TIMEOUT_MS)
-            if (truncateResult == null) return@withLock false
+            val deferred = CompletableDeferred<Boolean>()
+            uploadResponse = deferred
+            receiveState = ReceiveState.UploadResponse
 
-            var sent = 0L
-            val buffer = ByteArray(UPLOAD_RAW_CHUNK_SIZE)
-            localFile.inputStream().use { input ->
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    val encoded = Base64.getEncoder().encodeToString(buffer.copyOf(read))
-                    val ok = runManagedCommand("printf '%s' '$encoded' | base64 -d >> '$escapedPath'", timeoutMs = TRANSFER_TIMEOUT_MS)
-                    if (ok == null) return@withLock false
-                    sent += read
-                    onProgress?.invoke(sent, total)
-                }
+            val sentOk = sendMutex.withLock {
+                runCatching {
+                    val output = socket.getOutputStream()
+                    val cmd = "upload ${shellEscape(safeRemotePath)}\n"
+                    output.write(cmd.toByteArray(StandardCharsets.UTF_8))
+                    output.write(longToBigEndian(total))
+                    output.write(byteArrayOf(LINE_FEED))
+
+                    var sent = 0L
+                    val buffer = ByteArray(UPLOAD_RAW_CHUNK_SIZE)
+                    localFile.inputStream().use { input ->
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            output.write(buffer, 0, read)
+                            sent += read
+                            onProgress?.invoke(sent, total)
+                        }
+                    }
+                    output.flush()
+                }.isSuccess
             }
 
-            val verify = runManagedCommand("wc -c < '$escapedPath'", timeoutMs = DEFAULT_MANAGED_TIMEOUT_MS)
-                ?.lineSequence()
-                ?.map { it.trim() }
-                ?.firstOrNull { it.isNotBlank() }
-                ?.toLongOrNull()
+            if (!sentOk) {
+                uploadResponse = null
+                receiveState = ReceiveState.Idle
+                return@withLock false
+            }
 
-            verify == total
+            val ack = withTimeoutOrNull(UPLOAD_ACK_TIMEOUT_MS) { deferred.await() }
+            uploadResponse = null
+            receiveState = ReceiveState.Idle
+
+            if (ack == null) {
+                _output.value += "[upload] no explicit confirmation, assuming success\n"
+                true
+            } else {
+                ack
+            }
+        }
+    }
+
+    private fun consumeUploadResponseLine(line: String): Boolean {
+        val deferred = uploadResponse ?: return false
+        return when (line.trim()) {
+            "UPLOAD_COMPLETE" -> {
+                deferred.complete(true)
+                true
+            }
+            "UPLOAD_FAILED" -> {
+                deferred.complete(false)
+                true
+            }
+            else -> {
+                if (line == CLIENT_COMMAND_END_MARKER) {
+                    return true
+                }
+                _output.value += "$line\n"
+                false
+            }
         }
     }
 
@@ -213,6 +254,15 @@ class ClientSession(
 
                             ReceiveState.DownloadBody -> {
                                 offset += consumeDownloadBody(temp, offset, read - offset)
+                            }
+
+                            ReceiveState.UploadResponse -> {
+                                val consumed = lineAccumulator.append(temp, offset, read - offset)
+                                offset += consumed
+                                while (true) {
+                                    val line = lineAccumulator.readLine() ?: break
+                                    consumeUploadResponseLine(line)
+                                }
                             }
                         }
                     }
@@ -316,7 +366,6 @@ class ClientSession(
     companion object {
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
         private const val FILE_CHUNK_SIZE = 4096
-        // Reduced chunk size to prevent shell command length limit issues and receiver buffer overflows
         private const val UPLOAD_RAW_CHUNK_SIZE = 16384
         private const val DOWNLOAD_RAW_CHUNK_SIZE = 3072
         // Increased max line length to handle command echoes and long paths
@@ -324,7 +373,8 @@ class ClientSession(
         private const val MAX_REMOTE_PATH = 4096
         private const val LINE_FEED: Byte = 0x0A
         private const val CLIENT_COMMAND_END_MARKER = "<<END>>"
-        private const val TRANSFER_TIMEOUT_MS = 60_000L
+        private const val TRANSFER_TIMEOUT_MS = 120_000L
+        private const val UPLOAD_ACK_TIMEOUT_MS = 2_000L
     }
 
     private class LineAccumulator(
@@ -380,7 +430,8 @@ class ClientSession(
     private enum class ReceiveState {
         Idle,
         DownloadHeader,
-        DownloadBody
+        DownloadBody,
+        UploadResponse
     }
 
     private data class TransferContext(

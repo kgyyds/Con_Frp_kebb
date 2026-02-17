@@ -94,10 +94,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
                                     requestedIds.add(id)
                                     launch(Dispatchers.IO) {
-                                        val result = runManagedCommand(id, "getprop ro.serialno")
-                                        val model = result?.lines()?.firstOrNull()?.trim()
-                                        if (!model.isNullOrBlank()) {
-                                            _uiState.update { it.copy(clientModels = it.clientModels + (id to model)) }
+                                        val modelResult = runManagedCommand(id, "getprop ro.product.model")
+                                        val modelName = modelResult?.lines()?.firstOrNull()?.trim()
+                                        val serialResult = runManagedCommand(id, "getprop ro.serialno")
+                                        val serialNo = serialResult?.lines()?.firstOrNull()?.trim()
+
+                                        if (!modelName.isNullOrBlank() || !serialNo.isNullOrBlank()) {
+                                            _uiState.update {
+                                                it.copy(
+                                                    clientModels = it.clientModels + (
+                                                        id to ClientDisplayInfo(
+                                                            modelName = modelName?.takeIf { name -> name.isNotBlank() } ?: id,
+                                                            serialNo = serialNo?.takeIf { serial -> serial.isNotBlank() } ?: id
+                                                        )
+                                                    )
+                                                )
+                                            }
                                         }
                                     }
                                 }

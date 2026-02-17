@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -28,12 +27,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kgapp.frpshell.frp.FrpLogBus
 import com.kgapp.frpshell.model.ShellTarget
-import com.kgapp.frpshell.server.TcpServer
 
 @Composable
 fun ShellScreen(
     target: ShellTarget,
     fontSizeSp: Float,
+    output: String,
     frpRunning: Boolean,
     onStartFrp: () -> Unit,
     onStopFrp: () -> Unit,
@@ -42,15 +41,14 @@ fun ShellScreen(
     modifier: Modifier = Modifier
 ) {
     var input by remember(target.id) { mutableStateOf("") }
-    val output by when (target) {
-        is ShellTarget.FrpLog -> FrpLogBus.logs.collectAsState()
-        is ShellTarget.Client -> {
-            val fallback = remember { kotlinx.coroutines.flow.MutableStateFlow("client disconnected\n") }
-            (TcpServer.getClient(target.id)?.output ?: fallback).collectAsState()
-        }
+    val outputText = if (target is ShellTarget.FrpLog) {
+        val log by FrpLogBus.logs.collectAsState()
+        log
+    } else {
+        output
     }
     val parsedBuffer = remember(target.id) { AnsiAnnotatedBuffer() }
-    val ansiOutput = remember(output, parsedBuffer) { parsedBuffer.update(output) }
+    val ansiOutput = remember(outputText, parsedBuffer) { parsedBuffer.update(outputText) }
     val scrollState = rememberScrollState()
 
     fun submit() {
@@ -61,7 +59,7 @@ fun ShellScreen(
         input = ""
     }
 
-    LaunchedEffect(output) {
+    LaunchedEffect(outputText) {
         scrollState.animateScrollTo(scrollState.maxValue)
     }
 

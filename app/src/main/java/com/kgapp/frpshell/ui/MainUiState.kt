@@ -42,5 +42,6 @@ data class MainUiState(
     val screenCaptureLog: String = "",
     val screenCaptureCancelable: Boolean = false,
     val cameraSelectorVisible: Boolean = false,
-    val clientModels: Map<String, String> = emptyMap()
+    val clientModels: Map<String, String> = emptyMap(),
+    val clientOutputs: Map<String, String> = emptyMap()
 )

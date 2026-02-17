@@ -22,13 +22,18 @@ android {
         }
     }
 
+    val githubWorkspace = System.getenv("GITHUB_WORKSPACE")
+    val releaseKeystorePath = githubWorkspace?.let { "$it/release.jks" }
+    val releaseKeystoreExists = releaseKeystorePath?.let { file(it).exists() } == true
+
     signingConfigs {
-        create("release") {
-            val keystorePath = System.getenv("GITHUB_WORKSPACE") + "/release.jks"
-            storeFile = file(keystorePath)
-            storePassword = System.getenv("SIGNING_STORE_PASSWORD")
-            keyAlias = System.getenv("SIGNING_KEY_ALIAS")
-            keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+        if (releaseKeystoreExists) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+            }
         }
     }
 
@@ -39,7 +44,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release") //KotlinDsl写法。
+            signingConfig = signingConfigs.findByName("release") // CI 提供 keystore 时启用 release 签名。
         }
         getByName("debug") {
             isMinifyEnabled = false

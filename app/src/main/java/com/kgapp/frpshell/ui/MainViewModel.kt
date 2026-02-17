@@ -1,6 +1,7 @@
 package com.kgapp.frpshell.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kgapp.frpshell.core.AppCommand
@@ -47,123 +48,158 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val shellSendChannel = Channel<ShellSendRequest>(Channel.UNLIMITED)
 
     init {
+        logInit(MODULE_UI, "MainViewModel 初始化开始")
+
         // Shell 发送线程：只负责发送与立即回显，不等待返回。
         shellSendScope.launch {
-            for (request in shellSendChannel) {
-                dispatcher.post(AppCommand.SendShell(request.clientId, request.command))
+            runCatching {
+                for (request in shellSendChannel) {
+                    dispatcher.post(AppCommand.SendShell(request.clientId, request.command))
+                }
+            }.onFailure {
+                logInit(MODULE_UI, "Shell 发送线程异常", it)
             }
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val context = application.applicationContext
-            val jarFile = File(context.filesDir, "scrcpy-server.jar")
-            // Ensure file exists and is not empty
-            if (!jarFile.exists() || jarFile.length() == 0L) {
-                FrpLogBus.append("[初始化] 正在提取 scrcpy-server.jar 到应用目录...")
-                copyAssetToFile(context, "scrcpy-server.jar", jarFile)
-            } else {
-                FrpLogBus.append("[初始化] scrcpy-server.jar 已就绪")
+            runCatching {
+                val context = application.applicationContext
+                val jarFile = File(context.filesDir, "scrcpy-server.jar")
+                // Ensure file exists and is not empty
+                if (!jarFile.exists() || jarFile.length() == 0L) {
+                    FrpLogBus.append("[初始化] 正在提取 scrcpy-server.jar 到应用目录...")
+                    copyAssetToFile(context, "scrcpy-server.jar", jarFile)
+                } else {
+                    FrpLogBus.append("[初始化] scrcpy-server.jar 已就绪")
+                }
+            }.onFailure {
+                logInit(MODULE_NETWORK, "scrcpy 资源初始化异常", it)
             }
         }
 
         // Shell 接收线程：独立消费网络事件，按 END 边界聚合命令输出。
         viewModelScope.launch(Dispatchers.Default) {
-            val requestedIds = mutableSetOf<String>()
-            networkThread.events.collect { event ->
-                when (event) {
-                    is NetEvent.ShellOutputLine -> appendShellOutput(event.clientId, event.line)
-                    is NetEvent.ShellCommandEnded -> finishShellCommand(event.clientId)
-                    is NetEvent.ClientsChanged -> {
-                        val ids = event.clientIds
-                        requestedIds.retainAll(ids.toSet())
+            runCatching {
+                val requestedIds = mutableSetOf<String>()
+                networkThread.events.collect { event ->
+                    when (event) {
+                        is NetEvent.ShellOutputLine -> appendShellOutput(event.clientId, event.line)
+                        is NetEvent.ShellCommandEnded -> finishShellCommand(event.clientId)
+                        is NetEvent.ClientsChanged -> {
+                            val ids = event.clientIds
+                            requestedIds.retainAll(ids.toSet())
 
-                        ids.forEach { id ->
-                            if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
-                                requestedIds.add(id)
-                                launch(Dispatchers.IO) {
-                                    val result = runManagedCommand(id, "getprop ro.product.model")
-                                    val model = result?.lines()?.firstOrNull()?.trim()
-                                    if (!model.isNullOrBlank()) {
-                                        _uiState.update { it.copy(clientModels = it.clientModels + (id to model)) }
+                            ids.forEach { id ->
+                                if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
+                                    requestedIds.add(id)
+                                    launch(Dispatchers.IO) {
+                                        val result = runManagedCommand(id, "getprop ro.product.model")
+                                        val model = result?.lines()?.firstOrNull()?.trim()
+                                        if (!model.isNullOrBlank()) {
+                                            _uiState.update { it.copy(clientModels = it.clientModels + (id to model)) }
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        _uiState.update { state ->
-                            val safeTarget = if (state.selectedTarget is ShellTarget.Client && state.selectedTarget.id !in ids) {
-                                ShellTarget.FrpLog
-                            } else {
-                                state.selectedTarget
+                            _uiState.update { state ->
+                                val safeTarget = if (state.selectedTarget is ShellTarget.Client && state.selectedTarget.id !in ids) {
+                                    ShellTarget.FrpLog
+                                } else {
+                                    state.selectedTarget
+                                }
+                                val managerAlive = state.fileManagerVisible && state.fileManagerClientId in ids
+                                val editorAlive = state.fileEditorVisible && state.fileManagerClientId in ids
+
+                                val validModels = state.clientModels.filterKeys { it in ids }
+                                val validShell = state.shellItemsByClient.filterKeys { it in ids }
+
+                                state.copy(
+                                    clientIds = ids,
+                                    clientModels = validModels,
+                                    shellItemsByClient = validShell,
+                                    selectedTarget = safeTarget,
+                                    fileManagerVisible = managerAlive,
+                                    fileEditorVisible = editorAlive,
+                                    fileManagerClientId = if (managerAlive || editorAlive) state.fileManagerClientId else null
+                                )
                             }
-                            val managerAlive = state.fileManagerVisible && state.fileManagerClientId in ids
-                            val editorAlive = state.fileEditorVisible && state.fileManagerClientId in ids
-
-                            val validModels = state.clientModels.filterKeys { it in ids }
-                            val validShell = state.shellItemsByClient.filterKeys { it in ids }
-
-                            state.copy(
-                                clientIds = ids,
-                                clientModels = validModels,
-                                shellItemsByClient = validShell,
-                                selectedTarget = safeTarget,
-                                fileManagerVisible = managerAlive,
-                                fileEditorVisible = editorAlive,
-                                fileManagerClientId = if (managerAlive || editorAlive) state.fileManagerClientId else null
-                            )
                         }
                     }
                 }
+            }.onFailure {
+                logInit(MODULE_NETWORK, "网络事件订阅异常", it)
             }
         }
 
         viewModelScope.launch {
-            frpThread.events.collect { event ->
-                if (event is FrpEvent.RunningChanged) {
-                    _uiState.update { it.copy(frpRunning = event.running) }
+            runCatching {
+                frpThread.events.collect { event ->
+                    if (event is FrpEvent.RunningChanged) {
+                        _uiState.update { it.copy(frpRunning = event.running) }
+                    }
                 }
+            }.onFailure {
+                logInit(MODULE_FRP, "FRP 状态订阅异常", it)
             }
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val initialized = settingsStore.isInitialized()
-            val suAvailable = FrpManager.detectSuAvailable()
-            val useSuDefault = if (initialized) settingsStore.getUseSu() else suAvailable
-            val themeMode = settingsStore.getThemeMode()
-            val shellFontSizeSp = settingsStore.getShellFontSizeSp().coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
+            runCatching {
+                logInit(MODULE_UI, "开始加载启动配置")
+                val initialized = settingsStore.isInitialized()
+                val suAvailable = FrpManager.detectSuAvailable()
+                val useSuDefault = if (initialized) settingsStore.getUseSu() else suAvailable
+                val themeMode = settingsStore.getThemeMode()
+                val shellFontSizeSp = settingsStore.getShellFontSizeSp().coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
 
-            if (!initialized) {
-                settingsStore.setUseSu(useSuDefault)
-                settingsStore.setThemeMode(ThemeMode.SYSTEM)
-                settingsStore.setShellFontSizeSp(SettingsStore.DEFAULT_FONT_SIZE_SP)
-                settingsStore.setInitialized(true)
-            }
-
-            val configExists = frpManager.configExists()
-            val content = if (configExists) frpManager.readConfig() else DEFAULT_CONFIG_TEMPLATE
-            val localPort = resolveLocalPort(content)
-
-            _uiState.update {
-                it.copy(
-                    screen = if (configExists) ScreenDestination.Main else ScreenDestination.Settings,
-                    firstLaunchFlow = !configExists,
-                    configContent = content,
-                    suAvailable = suAvailable,
-                    useSu = useSuDefault,
-                    themeMode = themeMode,
-                    localPort = localPort,
-                    shellFontSizeSp = shellFontSizeSp
-                )
-            }
-
-            networkThread.post(NetCommand.StartServer(localPort))
-
-            if (configExists) {
-                if (useSuDefault && !suAvailable) {
-                    FrpLogBus.append("[设置] 已开启 su 但当前不可用，启动可能失败")
+                if (!initialized) {
+                    settingsStore.setUseSu(useSuDefault)
+                    settingsStore.setThemeMode(ThemeMode.SYSTEM)
+                    settingsStore.setShellFontSizeSp(SettingsStore.DEFAULT_FONT_SIZE_SP)
+                    settingsStore.setInitialized(true)
                 }
-                frpThread.post(FrpCommand.Start(useSuDefault))
+
+                val configExists = frpManager.configExists()
+                val content = if (configExists) frpManager.readConfig() else DEFAULT_CONFIG_TEMPLATE
+                val localPort = resolveLocalPort(content)
+
+                _uiState.update {
+                    it.copy(
+                        screen = if (configExists) ScreenDestination.Main else ScreenDestination.Settings,
+                        firstLaunchFlow = !configExists,
+                        configContent = content,
+                        suAvailable = suAvailable,
+                        useSu = useSuDefault,
+                        themeMode = themeMode,
+                        localPort = localPort,
+                        shellFontSizeSp = shellFontSizeSp
+                    )
+                }
+
+                networkThread.post(NetCommand.StartServer(localPort))
+
+                if (configExists) {
+                    if (useSuDefault && !suAvailable) {
+                        FrpLogBus.append("[设置] 已开启 su 但当前不可用，启动可能失败")
+                    }
+                    frpThread.post(FrpCommand.Start(useSuDefault))
+                }
+                logInit(MODULE_UI, "启动配置加载完成")
+            }.onFailure {
+                logInit(MODULE_UI, "启动配置加载失败", it)
             }
+        }
+    }
+
+    private fun logInit(module: String, message: String, throwable: Throwable? = null) {
+        val full = "[$module] $message"
+        FrpLogBus.append(full)
+        if (throwable == null) {
+            Log.i(LOG_TAG, full)
+        } else {
+            Log.e(LOG_TAG, "$full: ${throwable.message}", throwable)
+            FrpLogBus.append("[$module] 异常详情: ${throwable.message ?: throwable::class.java.simpleName}")
         }
     }
 
@@ -693,6 +729,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private data class ShellSendRequest(val clientId: String, val command: String)
 
     companion object {
+        private const val LOG_TAG = "FrpShellInit"
+        private const val MODULE_UI = "UI"
+        private const val MODULE_NETWORK = "Network"
+        private const val MODULE_FRP = "FrpManager"
         private const val DEFAULT_LOCAL_PORT = 23231
         private const val MIN_FONT_SIZE_SP = 12f
         private const val MAX_FONT_SIZE_SP = 24f

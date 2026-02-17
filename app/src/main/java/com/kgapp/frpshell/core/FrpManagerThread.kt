@@ -24,15 +24,27 @@ class FrpManagerThread(context: Context) {
 
     init {
         scope.launch {
-            manager.running.collect { _events.emit(FrpEvent.RunningChanged(it)) }
+            runCatching {
+                manager.running.collect { _events.emit(FrpEvent.RunningChanged(it)) }
+            }.onFailure {
+                com.kgapp.frpshell.frp.FrpLogBus.append("[FrpManager] 状态流订阅异常：${it.message ?: "未知错误"}")
+            }
         }
         scope.launch {
-            for (command in commandChannel) {
-                when (command) {
-                    is FrpCommand.Start -> manager.start(command.useSu)
-                    FrpCommand.Stop -> manager.stop()
-                    is FrpCommand.Restart -> manager.restart(command.useSu)
+            runCatching {
+                for (command in commandChannel) {
+                    runCatching {
+                        when (command) {
+                            is FrpCommand.Start -> manager.start(command.useSu)
+                            FrpCommand.Stop -> manager.stop()
+                            is FrpCommand.Restart -> manager.restart(command.useSu)
+                        }
+                    }.onFailure {
+                        com.kgapp.frpshell.frp.FrpLogBus.append("[FrpManager] 命令处理异常：${it.message ?: "未知错误"}")
+                    }
                 }
+            }.onFailure {
+                com.kgapp.frpshell.frp.FrpLogBus.append("[FrpManager] 命令循环异常：${it.message ?: "未知错误"}")
             }
         }
     }

@@ -3,6 +3,7 @@ package com.kgapp.frpshell.ui
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
@@ -32,12 +33,16 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kgapp.frpshell.frp.FrpLogBus
 import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.ui.theme.FrpShellTheme
 import kotlinx.coroutines.launch
@@ -56,6 +61,25 @@ import androidx.compose.ui.unit.dp
 fun MainScaffold(vm: MainViewModel = viewModel()) {
     data class PickedUploadFile(val file: File, val displayName: String)
     val uiState by vm.uiState.collectAsState()
+    val firstRenderLogged = remember { mutableSetOf<String>() }
+
+    LaunchedEffect(Unit) {
+        FrpLogBus.append("[UI] MainScaffold 组合开始")
+        Log.i("FrpShellCompose", "MainScaffold 组合开始")
+    }
+
+    LaunchedEffect(uiState.screen) {
+        FrpLogBus.append("[UI] 状态初始化 screen=${uiState.screen}")
+        Log.i("FrpShellCompose", "状态初始化 screen=${uiState.screen}")
+    }
+
+    SideEffect {
+        val key = "${uiState.screen}|${uiState.fileManagerVisible}|${uiState.fileEditorVisible}|${uiState.screenViewerVisible}"
+        if (firstRenderLogged.add(key)) {
+            FrpLogBus.append("[UI] 首次渲染完成 key=$key")
+            Log.i("FrpShellCompose", "首次渲染完成 key=$key")
+        }
+    }
 
     fun copyUriToCache(context: Context, uri: Uri): PickedUploadFile? {
         val displayName = runCatching {

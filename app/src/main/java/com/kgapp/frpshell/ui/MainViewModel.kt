@@ -122,8 +122,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     shellItemsByClient = validShell,
                                     selectedTarget = safeTarget,
                                     fileManagerVisible = managerAlive,
-                                    performanceVisible = performanceAlive,
-                                    processListVisible = if (performanceAlive) state.processListVisible else false,
+                                    processListVisible = state.processListVisible && state.selectedTarget is ShellTarget.Client && state.selectedTarget.id in ids,
                                     processPendingKill = null,
                                     fileEditorVisible = editorAlive,
                                     fileManagerClientId = if (managerAlive || editorAlive) state.fileManagerClientId else null
@@ -225,7 +224,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 selectedTarget = target,
-                performanceVisible = false,
                 processListVisible = false,
                 processPendingKill = null,
                 processErrorMessage = null,
@@ -324,24 +322,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         shellSendChannel.trySend(ShellSendRequest(target.id, text))
     }
 
-    fun openPerformance() {
-        (_uiState.value.selectedTarget as? ShellTarget.Client) ?: return
-        _uiState.update {
-            it.copy(
-                performanceVisible = true,
-                processListVisible = false,
-                processErrorMessage = null,
-                processItems = emptyList(),
-                processPendingKill = null
-            )
-        }
-    }
-
     fun openRunningPrograms() {
         val clientId = (_uiState.value.selectedTarget as? ShellTarget.Client)?.id ?: return
         _uiState.update {
             it.copy(
-                performanceVisible = true,
                 processListVisible = true,
                 processErrorMessage = null,
                 processPendingKill = null
@@ -353,7 +337,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun closePerformance() {
         _uiState.update {
             it.copy(
-                performanceVisible = false,
                 processListVisible = false,
                 processLoading = false,
                 processErrorMessage = null,
@@ -437,7 +420,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openFileManager() {
         val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
         _uiState.update {
-            it.copy(fileManagerVisible = true, fileEditorVisible = false, performanceVisible = false, processListVisible = false, processPendingKill = null, fileManagerClientId = target.id, fileManagerPath = "/", fileManagerFiles = emptyList())
+            it.copy(fileManagerVisible = true, fileEditorVisible = false, processListVisible = false, processPendingKill = null, fileManagerClientId = target.id, fileManagerPath = "/", fileManagerFiles = emptyList())
         }
 
         viewModelScope.launch(Dispatchers.IO) {

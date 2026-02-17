@@ -21,7 +21,6 @@ data class MainUiState(
     val shellFontSizeSp: Float = SettingsStore.DEFAULT_FONT_SIZE_SP,
     val frpRunning: Boolean = false,
     val fileManagerVisible: Boolean = false,
-    val performanceVisible: Boolean = false,
     val processListVisible: Boolean = false,
     val processLoading: Boolean = false,
     val processErrorMessage: String? = null,

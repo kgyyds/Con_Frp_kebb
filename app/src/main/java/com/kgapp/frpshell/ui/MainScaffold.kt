@@ -158,7 +158,6 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 else if (uiState.fileEditorVisible) "文件编辑"
                                 else if (uiState.fileManagerVisible) "文件管理"
                                 else if (uiState.processListVisible) "运行的程序"
-                                else if (uiState.performanceVisible) "性能"
                                 else if (uiState.screenViewerVisible) "屏幕截图"
                                 else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
@@ -171,15 +170,15 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                         isSettings -> vm.navigateBackToMain()
                                         uiState.fileEditorVisible -> vm.closeFileEditor()
                                         uiState.fileManagerVisible -> vm.closeFileManager()
-                                        uiState.processListVisible || uiState.performanceVisible -> vm.closePerformance()
+                                        uiState.processListVisible -> vm.closePerformance()
                                         uiState.screenViewerVisible -> vm.closeScreenViewer()
                                         else -> scope.launch { drawerState.open() }
                                     }
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.performanceVisible || uiState.processListVisible || uiState.screenViewerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.performanceVisible || uiState.processListVisible || uiState.screenViewerVisible) "back" else "open drawer"
+                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) "back" else "open drawer"
                                 )
                             }
                         },
@@ -199,7 +198,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                     },
                                     onStopRecord = { vm.sendCommand("pkill -9 screenrecord") },
                                     onOpenFileManager = vm::openFileManager,
-                                    onOpenPerformance = vm::openPerformance,
+                                    onOpenRunningPrograms = vm::openRunningPrograms,
                                     onRefreshProcessList = vm::refreshRunningPrograms,
                                     processListVisible = uiState.processListVisible
                                 )
@@ -261,13 +260,6 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         )
                     }
 
-                    uiState.performanceVisible -> {
-                        PerformanceScreen(
-                            contentPadding = padding,
-                            onOpenRunningPrograms = vm::openRunningPrograms,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
 
                     uiState.fileManagerVisible -> {
                         FileManagerScreen(
@@ -426,16 +418,30 @@ private fun TopBarMenus(
     onStartRecord: () -> Unit,
     onStopRecord: () -> Unit,
     onOpenFileManager: () -> Unit,
-    onOpenPerformance: () -> Unit,
+    onOpenRunningPrograms: () -> Unit,
     onRefreshProcessList: () -> Unit,
     processListVisible: Boolean
 ) {
     var imageMenuExpanded by remember { mutableStateOf(false) }
     var fileMenuExpanded by remember { mutableStateOf(false) }
+    var performanceMenuExpanded by remember { mutableStateOf(false) }
 
     if (showClientActions) {
-        IconButton(onClick = onOpenPerformance) {
-            Icon(Icons.Default.Speed, contentDescription = "性能")
+        IconButton(onClick = { performanceMenuExpanded = true }) {
+            Icon(Icons.Default.Speed, contentDescription = "性能菜单")
+        }
+        DropdownMenu(
+            expanded = performanceMenuExpanded,
+            onDismissRequest = { performanceMenuExpanded = false }
+        ) {
+            TopMenuItem(
+                text = "运行的程序",
+                icon = Icons.Default.Speed,
+                onClick = {
+                    performanceMenuExpanded = false
+                    onOpenRunningPrograms()
+                }
+            )
         }
 
         IconButton(onClick = { fileMenuExpanded = true }) {

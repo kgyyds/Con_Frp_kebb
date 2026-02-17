@@ -5,8 +5,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -31,6 +34,9 @@ class ClientSession(
 ) {
     private val _output = MutableStateFlow("")
     val output: StateFlow<String> = _output.asStateFlow()
+
+    private val _shellEvents = MutableSharedFlow<ShellEvent>(extraBufferCapacity = 256)
+    val shellEvents: SharedFlow<ShellEvent> = _shellEvents.asSharedFlow()
 
     private var recvJob: Job? = null
     private val closed = AtomicBoolean(false)
@@ -191,7 +197,12 @@ class ClientSession(
                                         continue
                                     }
                                     if (!consumeManagedLine(line)) {
-                                        _output.value += "$line\n"
+                                        if (line == CLIENT_COMMAND_END_MARKER) {
+                                            _shellEvents.tryEmit(ShellEvent.CommandEnd)
+                                        } else {
+                                            _output.value += "$line\n"
+                                            _shellEvents.tryEmit(ShellEvent.OutputLine(line))
+                                        }
                                     }
                                 }
                             }
@@ -289,6 +300,12 @@ class ClientSession(
         val buffer: StringBuilder = StringBuilder(),
         var started: Boolean = false
     )
+
+
+    sealed interface ShellEvent {
+        data class OutputLine(val line: String) : ShellEvent
+        data object CommandEnd : ShellEvent
+    }
 
     enum class DownloadResult {
         Success,

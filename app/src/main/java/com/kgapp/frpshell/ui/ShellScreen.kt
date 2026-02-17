@@ -1,6 +1,7 @@
 package com.kgapp.frpshell.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -71,6 +72,7 @@ fun ShellScreen(
         modifier = modifier
             .fillMaxSize()
             .padding(contentPadding)
+            .consumeWindowInsets(contentPadding)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         if (target is ShellTarget.FrpLog) {

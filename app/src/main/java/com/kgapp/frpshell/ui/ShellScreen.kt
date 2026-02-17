@@ -90,60 +90,59 @@ fun ShellScreen(
                 Button(onClick = onStartFrp, enabled = !frpRunning) { Text("启动 frp") }
                 Button(onClick = onStopFrp, enabled = frpRunning) { Text("停止 frp") }
             }
-            return@Column
-        }
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            itemsIndexed(commandItems) { _, item ->
-                Text(
-                    text = "$ ${item.commandText}",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = fontSizeSp.sp
-                )
-                if (item.outputText.isNotBlank()) {
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                itemsIndexed(commandItems) { _, item ->
                     Text(
-                        text = parsedBuffer.update(item.outputText),
+                        text = "$ ${item.commandText}",
                         fontFamily = FontFamily.Monospace,
                         fontSize = fontSizeSp.sp
                     )
+                    if (item.outputText.isNotBlank()) {
+                        Text(
+                            text = parsedBuffer.update(item.outputText),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = fontSizeSp.sp
+                        )
+                    }
+                    val statusHint = if (item.status == ShellCommandStatus.RUNNING) "执行中..." else "命令完成"
+                    Text(
+                        text = statusHint,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = (fontSizeSp - 2f).coerceAtLeast(10f).sp
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
                 }
-                val statusHint = if (item.status == ShellCommandStatus.RUNNING) "执行中..." else "命令完成"
-                Text(
-                    text = statusHint,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = (fontSizeSp - 2f).coerceAtLeast(10f).sp
-                )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
             }
-        }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .imePadding(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("输入命令...") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { submit() }),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = fontSizeSp.sp
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .imePadding(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("输入命令...") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { submit() }),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = fontSizeSp.sp
+                    )
                 )
-            )
-            Button(onClick = { submit() }) { Text("发送") }
+                Button(onClick = { submit() }) { Text("发送") }
+            }
         }
     }
 }

@@ -3,6 +3,7 @@ package com.kgapp.frpshell.core
 import com.kgapp.frpshell.frp.FrpLogBus
 import com.kgapp.frpshell.server.TcpServer
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -16,6 +17,7 @@ import kotlinx.coroutines.launch
 /**
  * 网络角色线程：唯一负责 TCP 监听、客户端命令与 shell 数据收发。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class NetworkThread {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
     private val commandChannel = Channel<NetCommand>(Channel.UNLIMITED)
@@ -84,8 +86,16 @@ class NetworkThread {
             if (outputJobs.containsKey(id)) return@forEach
             val session = TcpServer.getClient(id) ?: return@forEach
             outputJobs[id] = scope.launch {
-                session.output.collect { text ->
-                    _events.emit(NetEvent.ClientOutput(id, text))
+                session.shellEvents.collect { shellEvent ->
+                    when (shellEvent) {
+                        is com.kgapp.frpshell.server.ClientSession.ShellEvent.OutputLine -> {
+                            _events.emit(NetEvent.ShellOutputLine(id, shellEvent.line))
+                        }
+
+                        com.kgapp.frpshell.server.ClientSession.ShellEvent.CommandEnd -> {
+                            _events.emit(NetEvent.ShellCommandEnded(id))
+                        }
+                    }
                 }
             }
         }

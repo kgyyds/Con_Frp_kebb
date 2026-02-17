@@ -1,6 +1,7 @@
 package com.kgapp.frpshell.core
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
@@ -12,6 +13,7 @@ import kotlinx.coroutines.launch
 /**
  * 逻辑调度线程：接收 UI 意图并转发到网络/FRP 线程，不直接做 I/O。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class CommandDispatcherThread(
     private val networkThread: NetworkThread,
     private val frpThread: FrpManagerThread

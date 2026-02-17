@@ -43,5 +43,5 @@ data class MainUiState(
     val screenCaptureCancelable: Boolean = false,
     val cameraSelectorVisible: Boolean = false,
     val clientModels: Map<String, String> = emptyMap(),
-    val clientOutputs: Map<String, String> = emptyMap()
+    val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap()
 )

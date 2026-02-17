@@ -3,6 +3,7 @@ package com.kgapp.frpshell.core
 import android.content.Context
 import com.kgapp.frpshell.frp.FrpManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 
 /** FRP 角色线程：仅负责 frpc 生命周期管理与状态监听。 */
+@OptIn(ExperimentalCoroutinesApi::class)
 class FrpManagerThread(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
     private val manager = FrpManager(context, scope)

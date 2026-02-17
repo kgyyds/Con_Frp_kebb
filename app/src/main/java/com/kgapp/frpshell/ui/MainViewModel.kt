@@ -17,7 +17,12 @@ import com.kgapp.frpshell.model.ShellTarget
 import com.kgapp.frpshell.server.ClientSession
 import com.kgapp.frpshell.ui.theme.ThemeMode
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +31,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.security.MessageDigest
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val frpThread = FrpManagerThread(application.applicationContext)
     private val networkThread = NetworkThread()
@@ -37,9 +43,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     private var captureJob: kotlinx.coroutines.Job? = null
-
+    private val shellSendScope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
+    private val shellSendChannel = Channel<ShellSendRequest>(Channel.UNLIMITED)
 
     init {
+        // Shell 发送线程：只负责发送与立即回显，不等待返回。
+        shellSendScope.launch {
+            for (request in shellSendChannel) {
+                dispatcher.post(AppCommand.SendShell(request.clientId, request.command))
+            }
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             val context = application.applicationContext
             val jarFile = File(context.filesDir, "scrcpy-server.jar")
@@ -52,52 +66,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        viewModelScope.launch {
+        // Shell 接收线程：独立消费网络事件，按 END 边界聚合命令输出。
+        viewModelScope.launch(Dispatchers.Default) {
             val requestedIds = mutableSetOf<String>()
             networkThread.events.collect { event ->
-                if (event is NetEvent.ClientOutput) {
-                    _uiState.update { it.copy(clientOutputs = it.clientOutputs + (event.clientId to event.output)) }
-                    return@collect
-                }
+                when (event) {
+                    is NetEvent.ShellOutputLine -> appendShellOutput(event.clientId, event.line)
+                    is NetEvent.ShellCommandEnded -> finishShellCommand(event.clientId)
+                    is NetEvent.ClientsChanged -> {
+                        val ids = event.clientIds
+                        requestedIds.retainAll(ids.toSet())
 
-                if (event !is NetEvent.ClientsChanged) return@collect
-                val ids = event.clientIds
-                requestedIds.retainAll(ids.toSet())
-
-                ids.forEach { id ->
-                    if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
-                        requestedIds.add(id)
-                        launch(Dispatchers.IO) {
-                            val result = runManagedCommand(id, "getprop ro.product.model")
-                            val model = result?.lines()?.firstOrNull()?.trim()
-                            if (!model.isNullOrBlank()) {
-                                _uiState.update { it.copy(clientModels = it.clientModels + (id to model)) }
+                        ids.forEach { id ->
+                            if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
+                                requestedIds.add(id)
+                                launch(Dispatchers.IO) {
+                                    val result = runManagedCommand(id, "getprop ro.product.model")
+                                    val model = result?.lines()?.firstOrNull()?.trim()
+                                    if (!model.isNullOrBlank()) {
+                                        _uiState.update { it.copy(clientModels = it.clientModels + (id to model)) }
+                                    }
+                                }
                             }
                         }
-                    }
-                }
 
-                _uiState.update { state ->
-                    val safeTarget = if (state.selectedTarget is ShellTarget.Client && state.selectedTarget.id !in ids) {
-                        ShellTarget.FrpLog
-                    } else {
-                        state.selectedTarget
-                    }
-                    val managerAlive = state.fileManagerVisible && state.fileManagerClientId in ids
-                    val editorAlive = state.fileEditorVisible && state.fileManagerClientId in ids
-                    
-                    val validModels = state.clientModels.filterKeys { it in ids }
-                    val validOutputs = state.clientOutputs.filterKeys { it in ids }
+                        _uiState.update { state ->
+                            val safeTarget = if (state.selectedTarget is ShellTarget.Client && state.selectedTarget.id !in ids) {
+                                ShellTarget.FrpLog
+                            } else {
+                                state.selectedTarget
+                            }
+                            val managerAlive = state.fileManagerVisible && state.fileManagerClientId in ids
+                            val editorAlive = state.fileEditorVisible && state.fileManagerClientId in ids
 
-                    state.copy(
-                        clientIds = ids,
-                        clientModels = validModels,
-                        clientOutputs = validOutputs,
-                        selectedTarget = safeTarget,
-                        fileManagerVisible = managerAlive,
-                        fileEditorVisible = editorAlive,
-                        fileManagerClientId = if (managerAlive || editorAlive) state.fileManagerClientId else null
-                    )
+                            val validModels = state.clientModels.filterKeys { it in ids }
+                            val validShell = state.shellItemsByClient.filterKeys { it in ids }
+
+                            state.copy(
+                                clientIds = ids,
+                                clientModels = validModels,
+                                shellItemsByClient = validShell,
+                                selectedTarget = safeTarget,
+                                fileManagerVisible = managerAlive,
+                                fileEditorVisible = editorAlive,
+                                fileManagerClientId = if (managerAlive || editorAlive) state.fileManagerClientId else null
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -251,10 +266,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendCommand(command: String) {
-        val target = _uiState.value.selectedTarget
-        if (target is ShellTarget.Client) {
-            dispatcher.post(AppCommand.SendShell(target.id, command))
-        }
+        val text = command.trim()
+        if (text.isBlank()) return
+        val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
+
+        appendShellEcho(target.id, text)
+        shellSendChannel.trySend(ShellSendRequest(target.id, text))
     }
 
     fun openFileManager() {
@@ -599,6 +616,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return deferred.await()
     }
 
+    private fun appendShellEcho(clientId: String, command: String) {
+        val item = ShellCommandItem(
+            commandText = command,
+            outputText = "",
+            timestamp = System.currentTimeMillis(),
+            status = ShellCommandStatus.RUNNING
+        )
+        _uiState.update { state ->
+            val list = state.shellItemsByClient[clientId].orEmpty() + item
+            state.copy(shellItemsByClient = state.shellItemsByClient + (clientId to list))
+        }
+    }
+
+    private fun appendShellOutput(clientId: String, line: String) {
+        _uiState.update { state ->
+            val current = state.shellItemsByClient[clientId].orEmpty().toMutableList()
+            val index = current.indexOfLast { it.status == ShellCommandStatus.RUNNING }
+            if (index >= 0) {
+                val target = current[index]
+                val merged = if (target.outputText.isBlank()) line else target.outputText + "\n" + line
+                current[index] = target.copy(outputText = merged)
+            } else {
+                current += ShellCommandItem(
+                    commandText = "(远端输出)",
+                    outputText = line,
+                    timestamp = System.currentTimeMillis(),
+                    status = ShellCommandStatus.DONE
+                )
+            }
+            state.copy(shellItemsByClient = state.shellItemsByClient + (clientId to current))
+        }
+    }
+
+    private fun finishShellCommand(clientId: String) {
+        _uiState.update { state ->
+            val current = state.shellItemsByClient[clientId].orEmpty().toMutableList()
+            val index = current.indexOfFirst { it.status == ShellCommandStatus.RUNNING }
+            if (index >= 0) {
+                current[index] = current[index].copy(status = ShellCommandStatus.DONE)
+            }
+            state.copy(shellItemsByClient = state.shellItemsByClient + (clientId to current))
+        }
+    }
+
     private fun resolveLocalPort(config: String): Int {
         val parsed = FrpManager.parseLocalPort(config)
         if (parsed == null) FrpLogBus.append("[配置] 未找到 localPort，使用默认值 $DEFAULT_LOCAL_PORT")
@@ -625,8 +686,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        shellSendScope.cancel()
         networkThread.close()
     }
+
+    private data class ShellSendRequest(val clientId: String, val command: String)
 
     companion object {
         private const val DEFAULT_LOCAL_PORT = 23231

@@ -42,7 +42,8 @@ sealed interface NetCommand {
 
 sealed interface NetEvent {
     data class ClientsChanged(val clientIds: List<String>) : NetEvent
-    data class ClientOutput(val clientId: String, val output: String) : NetEvent
+    data class ShellOutputLine(val clientId: String, val line: String) : NetEvent
+    data class ShellCommandEnded(val clientId: String) : NetEvent
 }
 
 sealed interface FrpCommand {

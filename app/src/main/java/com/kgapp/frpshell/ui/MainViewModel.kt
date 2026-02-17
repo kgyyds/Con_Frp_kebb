@@ -94,7 +94,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
                                     requestedIds.add(id)
                                     launch(Dispatchers.IO) {
-                                        val result = runManagedCommand(id, "getprop ro.product.model")
+                                        val result = runManagedCommand(id, "getprop ro.serialno")
                                         val model = result?.lines()?.firstOrNull()?.trim()
                                         if (!model.isNullOrBlank()) {
                                             _uiState.update { it.copy(clientModels = it.clientModels + (id to model)) }

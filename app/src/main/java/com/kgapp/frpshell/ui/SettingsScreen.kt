@@ -28,11 +28,14 @@ fun SettingsScreen(
     suAvailable: Boolean,
     themeMode: ThemeMode,
     shellFontSizeSp: Float,
+    uploadScriptContent: String,
     firstLaunchFlow: Boolean,
     onConfigChanged: (String) -> Unit,
     onUseSuChanged: (Boolean) -> Unit,
     onThemeModeChanged: (ThemeMode) -> Unit,
     onShellFontSizeChanged: (Float) -> Unit,
+    onUploadScriptContentChanged: (String) -> Unit,
+    onSaveUploadScript: () -> Unit,
     onSave: () -> Unit,
     onSaveAndRestart: () -> Unit,
     modifier: Modifier = Modifier,
@@ -104,6 +107,20 @@ fun SettingsScreen(
             minLines = 14,
             label = { Text("frpc.toml") }
         )
+
+        OutlinedTextField(
+            value = uploadScriptContent,
+            onValueChange = onUploadScriptContentChanged,
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 10,
+            label = { Text("upload.sh") }
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onSaveUploadScript) {
+                Text("保存 upload.sh")
+            }
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onSave) {

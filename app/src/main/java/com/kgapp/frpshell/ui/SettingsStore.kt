@@ -33,12 +33,19 @@ class SettingsStore(context: Context) {
         prefs.edit().putFloat(KEY_SHELL_FONT_SIZE_SP, value).apply()
     }
 
+    fun getUploadScriptContent(): String = prefs.getString(KEY_UPLOAD_SCRIPT_CONTENT, "") ?: ""
+
+    fun setUploadScriptContent(value: String) {
+        prefs.edit().putString(KEY_UPLOAD_SCRIPT_CONTENT, value).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "frp_shell_settings"
         private const val KEY_INITIALIZED = "initialized"
         private const val KEY_USE_SU = "use_su"
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_SHELL_FONT_SIZE_SP = "shell_font_size_sp"
+        private const val KEY_UPLOAD_SCRIPT_CONTENT = "upload_script_content"
 
         const val DEFAULT_FONT_SIZE_SP = 14f
     }

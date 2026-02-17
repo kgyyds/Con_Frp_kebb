@@ -46,6 +46,7 @@ fun FileManagerScreen(
     onOpenFile: (RemoteFileItem) -> Unit,
     onEditFile: (RemoteFileItem) -> Unit,
     onDownloadFile: (RemoteFileItem) -> Unit,
+    onLargeFileUpload: (RemoteFileItem) -> Unit,
     onUploadFile: () -> Unit,
     onRename: (RemoteFileItem, String) -> Unit,
     onChmod: (RemoteFileItem, String) -> Unit,
@@ -138,6 +139,13 @@ fun FileManagerScreen(
                                 text = { Text("下载") },
                                 onClick = {
                                     onDownloadFile(item)
+                                    actionItem = null
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("大文件上传") },
+                                onClick = {
+                                    onLargeFileUpload(item)
                                     actionItem = null
                                 }
                             )

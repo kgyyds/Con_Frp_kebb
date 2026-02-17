@@ -19,6 +19,7 @@ data class MainUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val localPort: Int = 23231,
     val shellFontSizeSp: Float = SettingsStore.DEFAULT_FONT_SIZE_SP,
+    val uploadScriptContent: String = "",
     val frpRunning: Boolean = false,
     val fileManagerVisible: Boolean = false,
     val processListVisible: Boolean = false,

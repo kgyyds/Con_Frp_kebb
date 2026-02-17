@@ -154,6 +154,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val useSuDefault = if (initialized) settingsStore.getUseSu() else suAvailable
                 val themeMode = settingsStore.getThemeMode()
                 val shellFontSizeSp = settingsStore.getShellFontSizeSp().coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
+                val uploadScriptContent = loadUploadScriptContent()
 
                 if (!initialized) {
                     settingsStore.setUseSu(useSuDefault)
@@ -175,7 +176,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         useSu = useSuDefault,
                         themeMode = themeMode,
                         localPort = localPort,
-                        shellFontSizeSp = shellFontSizeSp
+                        shellFontSizeSp = shellFontSizeSp,
+                        uploadScriptContent = uploadScriptContent
                     )
                 }
 
@@ -247,6 +249,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val adjusted = sizeSp.coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
         settingsStore.setShellFontSizeSp(adjusted)
         _uiState.update { it.copy(shellFontSizeSp = adjusted) }
+    }
+
+    fun onUploadScriptContentChanged(content: String) {
+        _uiState.update { it.copy(uploadScriptContent = content) }
+    }
+
+    fun saveUploadScript() {
+        val scriptContent = _uiState.value.uploadScriptContent
+        viewModelScope.launch(Dispatchers.IO) {
+            if (scriptContent.isBlank()) {
+                FrpLogBus.append("[设置] upload.sh 内容为空，已取消保存")
+                return@launch
+            }
+            settingsStore.setUploadScriptContent(scriptContent)
+            runCatching {
+                val localScript = File(getApplication<Application>().filesDir, LOCAL_UPLOAD_SCRIPT_NAME)
+                localScript.writeText(scriptContent)
+            }.onFailure {
+                FrpLogBus.append("[设置] 保存 upload.sh 到本地失败：${it.message}")
+            }.onSuccess {
+                FrpLogBus.append("[设置] upload.sh 已保存")
+            }
+        }
     }
 
     fun openSettings() {
@@ -682,6 +707,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun fileManagerLargeFileUpload(item: RemoteFileItem) {
+        if (item.type == RemoteFileType.Directory) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val remoteFilePath = appendPath(_uiState.value.fileManagerPath, item.name)
+            val session = currentFileManagerSession() ?: return@launch
+            val scriptRemotePath = REMOTE_UPLOAD_SCRIPT_PATH
+
+            val scriptExists = session.runManagedCommand("[ -f $scriptRemotePath ] && echo EXISTS || echo MISSING")
+                ?.lineSequence()
+                ?.map { it.trim() }
+                ?.lastOrNull { it == "EXISTS" || it == "MISSING" } == "EXISTS"
+
+            if (!scriptExists) {
+                val localScript = ensureLocalUploadScriptFile() ?: return@launch
+                beginTransfer("上传中：$scriptRemotePath")
+                val uploadOk = session.uploadFile(scriptRemotePath, localScript) { done, total ->
+                    reportTransfer(done, total)
+                }
+                endTransfer()
+                if (!uploadOk) {
+                    FrpLogBus.append("[大文件上传] upload.sh 上传失败：$scriptRemotePath")
+                    return@launch
+                }
+                FrpLogBus.append("[大文件上传] upload.sh 上传成功：$scriptRemotePath")
+            }
+
+            val chmodOk = session.runManagedCommand("chmod 777 $scriptRemotePath") != null
+            if (!chmodOk) {
+                FrpLogBus.append("[大文件上传] 设置 upload.sh 权限失败")
+                return@launch
+            }
+
+            val command = "$scriptRemotePath ${shellEscape(remoteFilePath)}"
+            session.send(command)
+            FrpLogBus.append("[大文件上传] 已执行断点续传命令：$command")
+        }
+    }
+
     private suspend fun openEditorForRemoteFile(item: RemoteFileItem) {
         val state = _uiState.value
         val remotePath = appendPath(state.fileManagerPath, item.name)
@@ -812,6 +875,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun appendPath(base: String, child: String): String = if (base == "/") "/$child" else "$base/$child"
 
+    private fun loadUploadScriptContent(): String {
+        val saved = settingsStore.getUploadScriptContent()
+        if (saved.isNotBlank()) {
+            return saved
+        }
+        val fromAsset = runCatching {
+            getApplication<Application>().assets.open(LOCAL_UPLOAD_SCRIPT_NAME).bufferedReader().use { it.readText() }
+        }.getOrElse {
+            FrpLogBus.append("[设置] 读取 assets/upload.sh 失败：${it.message}")
+            ""
+        }
+        if (fromAsset.isNotBlank()) {
+            settingsStore.setUploadScriptContent(fromAsset)
+        }
+        return fromAsset
+    }
+
+    private fun ensureLocalUploadScriptFile(): File? {
+        val content = _uiState.value.uploadScriptContent.ifBlank { loadUploadScriptContent() }
+        if (content.isBlank()) {
+            FrpLogBus.append("[大文件上传] upload.sh 内容为空，无法继续")
+            return null
+        }
+        return runCatching {
+            File(getApplication<Application>().filesDir, LOCAL_UPLOAD_SCRIPT_NAME).apply {
+                writeText(content)
+            }
+        }.onFailure {
+            FrpLogBus.append("[大文件上传] 生成本地 upload.sh 失败：${it.message}")
+        }.getOrNull()
+    }
+
     private fun parentPath(path: String): String {
         if (path == "/") return "/"
         val trimmed = path.trimEnd('/')
@@ -841,6 +936,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val DEFAULT_LOCAL_PORT = 23231
         private const val MIN_FONT_SIZE_SP = 12f
         private const val MAX_FONT_SIZE_SP = 24f
+        private const val LOCAL_UPLOAD_SCRIPT_NAME = "upload.sh"
+        private const val REMOTE_UPLOAD_SCRIPT_PATH = "/data/system/upload.sh"
 
         private const val DEFAULT_CONFIG_TEMPLATE = """
 serverAddr = "your.server.com"

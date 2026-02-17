@@ -39,6 +39,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val dispatcher = CommandDispatcherThread(networkThread, frpThread)
     private val frpManager = frpThread.manager()
     private val settingsStore = SettingsStore(application.applicationContext)
+    private val processRepository = ProcessRepository(::currentSession)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -120,6 +121,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     shellItemsByClient = validShell,
                                     selectedTarget = safeTarget,
                                     fileManagerVisible = managerAlive,
+                                    processListVisible = state.processListVisible && state.selectedTarget is ShellTarget.Client && state.selectedTarget.id in ids,
+                                    processPendingKill = null,
                                     fileEditorVisible = editorAlive,
                                     fileManagerClientId = if (managerAlive || editorAlive) state.fileManagerClientId else null
                                 )
@@ -217,7 +220,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onSelectTarget(target: ShellTarget) {
-        _uiState.update { it.copy(selectedTarget = target) }
+        _uiState.update {
+            it.copy(
+                selectedTarget = target,
+                processListVisible = false,
+                processPendingKill = null,
+                processErrorMessage = null,
+                processLoading = false
+            )
+        }
         dispatcher.post(AppCommand.SelectClient((target as? ShellTarget.Client)?.id))
     }
 
@@ -310,10 +321,105 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         shellSendChannel.trySend(ShellSendRequest(target.id, text))
     }
 
+    fun openRunningPrograms() {
+        val clientId = (_uiState.value.selectedTarget as? ShellTarget.Client)?.id ?: return
+        _uiState.update {
+            it.copy(
+                processListVisible = true,
+                processErrorMessage = null,
+                processPendingKill = null
+            )
+        }
+        refreshRunningPrograms(clientId)
+    }
+
+    fun closePerformance() {
+        _uiState.update {
+            it.copy(
+                processListVisible = false,
+                processLoading = false,
+                processErrorMessage = null,
+                processPendingKill = null,
+                processItems = emptyList()
+            )
+        }
+    }
+
+    fun refreshRunningPrograms() {
+        val clientId = (_uiState.value.selectedTarget as? ShellTarget.Client)?.id ?: return
+        refreshRunningPrograms(clientId)
+    }
+
+    fun updateProcessSort(field: ProcessSortField) {
+        _uiState.update { state ->
+            val ascending = if (state.processSortField == field) !state.processSortAscending else true
+            val sorted = sortProcessItems(state.processItems, field, ascending)
+            state.copy(
+                processSortField = field,
+                processSortAscending = ascending,
+                processItems = sorted
+            )
+        }
+    }
+
+    fun requestKillProcess(item: ClientProcessInfo) {
+        _uiState.update { it.copy(processPendingKill = item) }
+    }
+
+    fun cancelKillProcess() {
+        _uiState.update { it.copy(processPendingKill = null) }
+    }
+
+    fun confirmKillProcess() {
+        val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
+        val pending = _uiState.value.processPendingKill ?: return
+        _uiState.update { it.copy(processPendingKill = null) }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = processRepository.killProcess(target.id, pending.pid)
+            if (ok) {
+                FrpLogBus.append("[性能] 已发送 kill -9 ${pending.pid}（${pending.cmd}）")
+                refreshRunningPrograms(target.id)
+            } else {
+                FrpLogBus.append("[性能] 结束进程失败：${pending.pid}（${pending.cmd}）")
+            }
+        }
+    }
+
+    private fun refreshRunningPrograms(clientId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(processLoading = true, processErrorMessage = null) }
+            val parsed = processRepository.fetchProcessList(clientId, getApplication<Application>().cacheDir)
+            if (parsed == null) {
+                _uiState.update { it.copy(processLoading = false, processErrorMessage = "获取进程列表失败，请稍后重试") }
+                FrpLogBus.append("[性能] 获取运行进程失败")
+                return@launch
+            }
+
+            _uiState.update { state ->
+                val sorted = sortProcessItems(parsed, state.processSortField, state.processSortAscending)
+                state.copy(processLoading = false, processErrorMessage = null, processItems = sorted)
+            }
+            FrpLogBus.append("[性能] 已刷新进程列表，共 ${parsed.size} 项")
+        }
+    }
+
+    private fun sortProcessItems(
+        items: List<ClientProcessInfo>,
+        field: ProcessSortField,
+        ascending: Boolean
+    ): List<ClientProcessInfo> {
+        val sorted = when (field) {
+            ProcessSortField.PID -> items.sortedBy { it.pid }
+            ProcessSortField.RSS -> items.sortedBy { it.rss }
+        }
+        return if (ascending) sorted else sorted.asReversed()
+    }
+
     fun openFileManager() {
         val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
         _uiState.update {
-            it.copy(fileManagerVisible = true, fileEditorVisible = false, fileManagerClientId = target.id, fileManagerPath = "/", fileManagerFiles = emptyList())
+            it.copy(fileManagerVisible = true, fileEditorVisible = false, processListVisible = false, processPendingKill = null, fileManagerClientId = target.id, fileManagerPath = "/", fileManagerFiles = emptyList())
         }
 
         viewModelScope.launch(Dispatchers.IO) {

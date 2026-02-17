@@ -111,6 +111,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 val managerAlive = state.fileManagerVisible && state.fileManagerClientId in ids
                                 val editorAlive = state.fileEditorVisible && state.fileManagerClientId in ids
+                                val performanceAlive = state.performanceVisible && state.selectedTarget is ShellTarget.Client && state.selectedTarget.id in ids
 
                                 val validModels = state.clientModels.filterKeys { it in ids }
                                 val validShell = state.shellItemsByClient.filterKeys { it in ids }

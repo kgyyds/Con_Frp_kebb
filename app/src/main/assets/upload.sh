@@ -1,63 +1,65 @@
 #!/system/bin/sh
 
-# ====================== 配置区 ======================
-URL="http://服务器IP/upload.php"
-LOG="./upload.log"
-# ====================================================
-
-if [ $# -ne 1 ]; then
-    echo "用法: $0 <文件路径>"
-    exit 1
-fi
-
-FILE="$1"
-if [ ! -f "$FILE" ]; then
-    echo "文件不存在: $FILE"
-    exit 1
-fi
-
-# 后台运行自己，不堵塞 shell
-if [ -z "$BACKGROUND" ]; then
-    export BACKGROUND=1
-    nohup sh "$0" "$FILE" >> "$LOG" 2>&1 &
-    echo "上传已后台运行"
-    echo "查看日志: tail -f $LOG"
+# ====== self-background ======
+if [ -z "$UPLOAD_BG" ]; then
+    export UPLOAD_BG=1
+    nohup "$0" "$@" >/dev/null 2>&1 &
     exit 0
 fi
+# ====== background process below ======
 
-# ====================== 正式上传逻辑 ======================
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+SERVER="http://111.170.155.141:27938"
+FILE="$1"
+PARTS=20
+
+FILENAME=$(basename "$FILE")
+FILESIZE=$(stat -c %s "$FILE")
+FILEID=$(md5sum "$FILE" | awk '{print $1}')
+LOG="./upload_${FILENAME}.log"
+
+PART_SIZE=$((FILESIZE / PARTS))
+
+# 查询服务器已有分块
+EXIST=$(curl -s "$SERVER/status.php?file_id=$FILEID")
+
+echo "[*] server has parts: $EXIST" >> "$LOG"
+
+has_part() {
+    echo ",$EXIST," | grep -q ",$1,"
 }
 
-log "==================== 开始上传 ===================="
-log "文件: $FILE"
-
-while true; do
-    # 获取服务器已上传大小
-    UPLOADED=$(curl -s "$URL" -d "name=$(basename "$FILE")" 2>/dev/null \
-        | grep -o '"total_size":[0-9]*' \
-        | cut -d: -f2 \
-        | tr -cd '0-9')
-
-    UPLOADED=${UPLOADED:-0}
-    LOCAL_SIZE=$(ls -l "$FILE" | awk '{print $5}')
-
-    log "进度: $UPLOADED / $LOCAL_SIZE"
-
-    # 传完退出
-    if [ "$UPLOADED" -ge "$LOCAL_SIZE" ]; then
-        log "上传完成"
-        break
+i=0
+while [ $i -lt $PARTS ]; do
+    if has_part "$i"; then
+        echo "[=] skip part $i (already exists)" >> "$LOG"
+        i=$((i + 1))
+        continue
     fi
 
-    # 断点续传
-    curl -s -X POST \
-        -H "Content-Type: application/octet-stream" \
-        -d "name=$(basename "$FILE")" \
-        -d "offset=$UPLOADED" \
-        --data-binary "@$FILE#$UPLOADED" \
-        "$URL" >/dev/null 2>&1
+    OFFSET=$((i * PART_SIZE))
+    if [ $i -eq $((PARTS - 1)) ]; then
+        SIZE=$((FILESIZE - OFFSET))
+    else
+        SIZE=$PART_SIZE
+    fi
 
-    sleep 2
+    TMP="/tmp/${FILEID}_part_$i"
+    dd if="$FILE" bs=1 skip="$OFFSET" count="$SIZE" status=none > "$TMP"
+    PART_MD5=$(md5sum "$TMP" | awk '{print $1}')
+
+    echo "[*] upload part $i md5=$PART_MD5" >> "$LOG"
+
+    curl -s -X POST \
+        -F "file_id=$FILEID" \
+        -F "filename=$FILENAME" \
+        -F "index=$i" \
+        -F "total=$PARTS" \
+        -F "part_md5=$PART_MD5" \
+        -F "chunk=@$TMP" \
+        "$SERVER/upload.php" >> "$LOG"
+
+    rm -f "$TMP"
+    i=$((i + 1))
 done
+
+echo "[*] upload finished" >> "$LOG"

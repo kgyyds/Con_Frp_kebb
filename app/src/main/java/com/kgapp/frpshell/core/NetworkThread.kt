@@ -29,15 +29,27 @@ class NetworkThread {
 
     init {
         scope.launch {
-            TcpServer.clientIds.collect { ids ->
-                _events.emit(NetEvent.ClientsChanged(ids))
-                syncOutputCollectors(ids)
+            runCatching {
+                TcpServer.clientIds.collect { ids ->
+                    _events.emit(NetEvent.ClientsChanged(ids))
+                    syncOutputCollectors(ids)
+                }
+            }.onFailure {
+                FrpLogBus.append("[Network] 客户端列表订阅异常：${it.message ?: "未知错误"}")
             }
         }
 
         scope.launch {
-            for (command in commandChannel) {
-                handleCommand(command)
+            runCatching {
+                for (command in commandChannel) {
+                    runCatching {
+                        handleCommand(command)
+                    }.onFailure {
+                        FrpLogBus.append("[Network] 命令处理异常：${it.message ?: "未知错误"}")
+                    }
+                }
+            }.onFailure {
+                FrpLogBus.append("[Network] 命令循环异常：${it.message ?: "未知错误"}")
             }
         }
     }
@@ -86,16 +98,20 @@ class NetworkThread {
             if (outputJobs.containsKey(id)) return@forEach
             val session = TcpServer.getClient(id) ?: return@forEach
             outputJobs[id] = scope.launch {
-                session.shellEvents.collect { shellEvent ->
-                    when (shellEvent) {
-                        is com.kgapp.frpshell.server.ClientSession.ShellEvent.OutputLine -> {
-                            _events.emit(NetEvent.ShellOutputLine(id, shellEvent.line))
-                        }
+                runCatching {
+                    session.shellEvents.collect { shellEvent ->
+                        when (shellEvent) {
+                            is com.kgapp.frpshell.server.ClientSession.ShellEvent.OutputLine -> {
+                                _events.emit(NetEvent.ShellOutputLine(id, shellEvent.line))
+                            }
 
-                        com.kgapp.frpshell.server.ClientSession.ShellEvent.CommandEnd -> {
-                            _events.emit(NetEvent.ShellCommandEnded(id))
+                            com.kgapp.frpshell.server.ClientSession.ShellEvent.CommandEnd -> {
+                                _events.emit(NetEvent.ShellCommandEnded(id))
+                            }
                         }
                     }
+                }.onFailure {
+                    FrpLogBus.append("[Network] Shell 事件收集异常($id)：${it.message ?: "未知错误"}")
                 }
             }
         }

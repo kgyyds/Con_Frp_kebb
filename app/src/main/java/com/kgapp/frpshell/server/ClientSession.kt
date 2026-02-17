@@ -55,7 +55,7 @@ class ClientSession(
     private var transferContext: TransferContext? = null
 
     @Volatile
-    private var uploadResponse: CompletableDeferred<Boolean>? = null
+    private var uploadResponse: CompletableDeferred<UploadSignal>? = null
 
     fun start() {
         startReceiver()
@@ -100,49 +100,70 @@ class ClientSession(
         return transferMutex.withLock {
             val total = localFile.length()
             onProgress?.invoke(0L, total)
-
-            val deferred = CompletableDeferred<Boolean>()
-            uploadResponse = deferred
             receiveState = ReceiveState.UploadResponse
 
-            val sentOk = sendMutex.withLock {
-                runCatching {
-                    val output = socket.getOutputStream()
-                    val cmd = "upload ${shellEscape(safeRemotePath)}\n"
-                    output.write(cmd.toByteArray(StandardCharsets.UTF_8))
-                    output.write(longToBigEndian(total))
-                    output.write(byteArrayOf(LINE_FEED))
+            try {
+                val readyDeferred = CompletableDeferred<UploadSignal>()
+                uploadResponse = readyDeferred
 
-                    var sent = 0L
-                    val buffer = ByteArray(UPLOAD_RAW_CHUNK_SIZE)
-                    localFile.inputStream().use { input ->
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read <= 0) break
-                            output.write(buffer, 0, read)
-                            sent += read
-                            onProgress?.invoke(sent, total)
-                        }
+                val commandSent = sendMutex.withLock {
+                    runCatching {
+                        val output = socket.getOutputStream()
+                        val cmd = "upload ${shellEscape(safeRemotePath)} $total\n"
+                        output.write(cmd.toByteArray(StandardCharsets.UTF_8))
+                        output.flush()
+                    }.isSuccess
+                }
+                if (!commandSent) {
+                    uploadResponse = null
+                    return@withLock false
+                }
+
+                when (withTimeoutOrNull(UPLOAD_READY_TIMEOUT_MS) { readyDeferred.await() }) {
+                    UploadSignal.Ready -> Unit
+                    UploadSignal.Failed, null -> {
+                        uploadResponse = null
+                        return@withLock false
                     }
-                    output.flush()
-                }.isSuccess
-            }
+                    UploadSignal.Complete -> {
+                        uploadResponse = null
+                        return@withLock true
+                    }
+                }
 
-            if (!sentOk) {
+                val completeDeferred = CompletableDeferred<UploadSignal>()
+                uploadResponse = completeDeferred
+
+                val bodySent = sendMutex.withLock {
+                    runCatching {
+                        val output = socket.getOutputStream()
+                        var sent = 0L
+                        val buffer = ByteArray(UPLOAD_RAW_CHUNK_SIZE)
+                        localFile.inputStream().use { input ->
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read <= 0) break
+                                output.write(buffer, 0, read)
+                                sent += read
+                                onProgress?.invoke(sent, total)
+                            }
+                        }
+                        output.flush()
+                    }.isSuccess
+                }
+
+                if (!bodySent) {
+                    uploadResponse = null
+                    return@withLock false
+                }
+
+                when (withTimeoutOrNull(UPLOAD_COMPLETE_TIMEOUT_MS) { completeDeferred.await() }) {
+                    UploadSignal.Complete -> true
+                    UploadSignal.Failed, UploadSignal.Ready, null -> false
+                }
+            } finally {
                 uploadResponse = null
                 receiveState = ReceiveState.Idle
-                return@withLock false
-            }
-
-            val ack = withTimeoutOrNull(UPLOAD_ACK_TIMEOUT_MS) { deferred.await() }
-            uploadResponse = null
-            receiveState = ReceiveState.Idle
-
-            if (ack == null) {
-                _output.value += "[upload] no explicit confirmation, assuming success\n"
-                true
-            } else {
-                ack
             }
         }
     }
@@ -150,12 +171,16 @@ class ClientSession(
     private fun consumeUploadResponseLine(line: String): Boolean {
         val deferred = uploadResponse ?: return false
         return when (line.trim()) {
+            "UPLOAD_READY" -> {
+                if (!deferred.isCompleted) deferred.complete(UploadSignal.Ready)
+                true
+            }
             "UPLOAD_COMPLETE" -> {
-                deferred.complete(true)
+                if (!deferred.isCompleted) deferred.complete(UploadSignal.Complete)
                 true
             }
             "UPLOAD_FAILED" -> {
-                deferred.complete(false)
+                if (!deferred.isCompleted) deferred.complete(UploadSignal.Failed)
                 true
             }
             else -> {
@@ -363,6 +388,12 @@ class ClientSession(
         Failed
     }
 
+    private enum class UploadSignal {
+        Ready,
+        Complete,
+        Failed
+    }
+
     companion object {
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
         private const val FILE_CHUNK_SIZE = 4096
@@ -374,7 +405,8 @@ class ClientSession(
         private const val LINE_FEED: Byte = 0x0A
         private const val CLIENT_COMMAND_END_MARKER = "<<END>>"
         private const val TRANSFER_TIMEOUT_MS = 120_000L
-        private const val UPLOAD_ACK_TIMEOUT_MS = 2_000L
+        private const val UPLOAD_READY_TIMEOUT_MS = 10_000L
+        private const val UPLOAD_COMPLETE_TIMEOUT_MS = 120_000L
     }
 
     private class LineAccumulator(

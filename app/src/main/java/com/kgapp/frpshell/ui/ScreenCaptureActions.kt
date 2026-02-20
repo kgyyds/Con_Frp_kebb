@@ -3,6 +3,7 @@ package com.kgapp.frpshellpro.ui
 import android.app.Application
 import android.content.Context
 import com.kgapp.frpshellpro.frp.FrpLogBus
+import com.kgapp.frpshellpro.domain.usecase.CaptureUseCase
 import com.kgapp.frpshellpro.server.ClientSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +18,7 @@ internal fun launchScreenCaptureJob(
     scope: CoroutineScope,
     uiState: MutableStateFlow<MainUiState>,
     targetId: String,
-    getSession: (String) -> ClientSession?,
+    captureUseCase: CaptureUseCase,
     cacheDir: File
 ): Job {
     return scope.launch(Dispatchers.IO) {
@@ -29,15 +30,12 @@ internal fun launchScreenCaptureJob(
         }
 
         try {
-            val session = getSession(targetId) ?: return@launch
-
             FrpLogBus.append("[截图] 开始执行截图")
-            session.runManagedCommand("screencap -p /data/local/tmp/tmp.png")
 
             val remotePath = "/data/local/tmp/tmp.png"
             val cacheFile = File(cacheDir, "screen_${System.currentTimeMillis()}.png")
 
-            val result = session.downloadFile(remotePath, cacheFile)
+            val result = captureUseCase.captureScreen(targetId, remotePath, cacheFile)
             if (result == ClientSession.DownloadResult.Success) {
                 uiState.update {
                     it.copy(
@@ -47,7 +45,7 @@ internal fun launchScreenCaptureJob(
                     )
                 }
                 FrpLogBus.append("[截图] 截图成功")
-                session.runManagedCommand("rm /data/local/tmp/tmp.png")
+                captureUseCase.runCommand(targetId, "rm /data/local/tmp/tmp.png")
             } else {
                 FrpLogBus.append("[截图] 截图失败：下载远程文件失败")
             }
@@ -63,7 +61,7 @@ internal fun launchCameraPhotoCaptureJob(
     uiState: MutableStateFlow<MainUiState>,
     targetId: String,
     cameraId: Int,
-    getSession: (String) -> ClientSession?,
+    captureUseCase: CaptureUseCase,
     appContext: Application,
     copyAssetToFile: (Context, String, File) -> Unit
 ): Job {
@@ -80,7 +78,6 @@ internal fun launchCameraPhotoCaptureJob(
         }
 
         try {
-            val session = getSession(targetId) ?: return@launch
             uiState.update { it.copy(screenCaptureLoadingText = "正在检查远程组件...") }
 
             val localJar = File(appContext.filesDir, "scrcpy-server.jar")
@@ -95,14 +92,14 @@ internal fun launchCameraPhotoCaptureJob(
             }
 
             val checkCmd = "if [ -f /data/local/tmp/scrcpy-server.jar ]; then echo 'exists'; else echo 'missing'; fi"
-            val checkResult = session.runManagedCommand(checkCmd)?.trim()
+            val checkResult = captureUseCase.runCommand(targetId, checkCmd)?.trim()
             val toolExists = checkResult?.contains("exists") == true
 
             if (!toolExists) {
                 uiState.update { it.copy(screenCaptureLoadingText = "远程组件缺失，准备上传...") }
                 updateLog("正在上传 scrcpy-server.jar...")
 
-                val ok = session.uploadFile("/data/local/tmp/scrcpy-server.jar", localJar) { done, total ->
+                val ok = captureUseCase.uploadDependency(targetId, "/data/local/tmp/scrcpy-server.jar", localJar) { done, total ->
                     val percent = if (total > 0) (done * 100 / total).toInt() else 0
                     uiState.update { it.copy(screenCaptureLoadingText = "正在上传组件: $percent%") }
                 }
@@ -113,14 +110,14 @@ internal fun launchCameraPhotoCaptureJob(
                     return@launch
                 }
 
-                session.runManagedCommand("chmod 777 /data/local/tmp/scrcpy-server.jar")
+                captureUseCase.runCommand(targetId, "chmod 777 /data/local/tmp/scrcpy-server.jar")
             } else {
                 updateLog("远程组件检查通过")
                 uiState.update { it.copy(screenCaptureLoadingText = "组件检查通过") }
             }
 
             val verifyCmd = "ls -l /data/local/tmp/scrcpy-server.jar"
-            val verifyResult = session.runManagedCommand(verifyCmd)
+            val verifyResult = captureUseCase.runCommand(targetId, verifyCmd)
             if (verifyResult == null || !verifyResult.contains("scrcpy-server.jar")) {
                 updateLog("错误：组件校验失败，远程文件不可见")
                 uiState.update { it.copy(screenCaptureLoadingText = "组件校验失败") }
@@ -131,7 +128,7 @@ internal fun launchCameraPhotoCaptureJob(
             updateLog("发送拍照指令 (camera_id=$cameraId)...")
 
             val cmd = """(sh -c "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1 < /dev/null" &)"""
-            session.runManagedCommand(cmd)
+            captureUseCase.runCommand(targetId, cmd)
 
             updateLog("等待照片生成 (轮询)...")
 
@@ -143,7 +140,7 @@ internal fun launchCameraPhotoCaptureJob(
 
             while (System.currentTimeMillis() - startTime < timeoutMs) {
                 val checkPhotoCmd = "ls $remotePath 2>/dev/null || true"
-                val result = session.runManagedCommand(checkPhotoCmd, timeoutMs = 2000)?.trim()
+                val result = captureUseCase.runCommand(targetId, checkPhotoCmd, timeoutMs = 2000)?.trim()
                 if (result != null && result.contains(remotePath)) {
                     photoExists = true
                     break
@@ -157,7 +154,7 @@ internal fun launchCameraPhotoCaptureJob(
                 updateLog("开始下载照片...")
 
                 val cacheFile = File(appContext.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
-                val result = session.downloadFile(remotePath, cacheFile) { done, total ->
+                val result = captureUseCase.downloadCapture(targetId, remotePath, cacheFile) { done, total ->
                     val percent = if (total > 0) (done * 100 / total).toInt() else 0
                     uiState.update { it.copy(screenCaptureLoadingText = "正在下载照片: $percent%") }
                 }
@@ -171,7 +168,7 @@ internal fun launchCameraPhotoCaptureJob(
                             screenViewerTimestamp = System.currentTimeMillis()
                         )
                     }
-                    session.runManagedCommand("rm $remotePath")
+                    captureUseCase.runCommand(targetId, "rm $remotePath")
                 } else {
                     updateLog("错误：照片下载失败")
                     uiState.update { it.copy(screenCaptureLoadingText = "下载失败") }

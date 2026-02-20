@@ -12,12 +12,16 @@ import com.kgapp.frpshellpro.core.FrpManagerThread
 import com.kgapp.frpshellpro.core.NetCommand
 import com.kgapp.frpshellpro.core.NetEvent
 import com.kgapp.frpshellpro.core.NetworkThread
+import com.kgapp.frpshellpro.data.repository.DeviceCommandRepositoryImpl
+import com.kgapp.frpshellpro.domain.usecase.CaptureUseCase
+import com.kgapp.frpshellpro.domain.usecase.FileManagerUseCase
+import com.kgapp.frpshellpro.domain.usecase.ProcessUseCase
+import com.kgapp.frpshellpro.domain.usecase.ShellUseCase
 import com.kgapp.frpshellpro.frp.FrpLogBus
 import com.kgapp.frpshellpro.frp.FrpManager
 import com.kgapp.frpshellpro.model.ShellTarget
 import com.kgapp.frpshellpro.server.ClientSession
 import com.kgapp.frpshellpro.ui.theme.ThemeMode
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +43,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val dispatcher = CommandDispatcherThread(networkThread, frpThread)
     private val frpManager = frpThread.manager()
     private val settingsStore = SettingsStore(application.applicationContext)
-    private val processRepository = ProcessRepository(::currentSession)
+    private val deviceCommandRepository = DeviceCommandRepositoryImpl(networkThread, ::currentSession)
+    private val shellUseCase = ShellUseCase(deviceCommandRepository)
+    private val fileManagerUseCase = FileManagerUseCase(deviceCommandRepository)
+    private val processUseCase = ProcessUseCase(shellUseCase, fileManagerUseCase)
+    private val captureUseCase = CaptureUseCase(shellUseCase, fileManagerUseCase)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -426,7 +434,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(processPendingKill = null) }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val ok = processRepository.killProcess(target.id, pending.pid)
+            val ok = processUseCase.killProcess(target.id, pending.pid)
             if (ok) {
                 FrpLogBus.append("[性能] 已发送 kill -9 ${pending.pid}（${pending.cmd}）")
                 refreshRunningPrograms(target.id)
@@ -439,7 +447,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun refreshRunningPrograms(clientId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(processLoading = true, processErrorMessage = null) }
-            val parsed = processRepository.fetchProcessList(clientId, getApplication<Application>().cacheDir)
+            val parsed = processUseCase.fetchProcessList(clientId, getApplication<Application>().cacheDir)
             if (parsed == null) {
                 _uiState.update { it.copy(processLoading = false, processErrorMessage = "获取进程列表失败，请稍后重试") }
                 FrpLogBus.append("[性能] 获取运行进程失败")
@@ -541,9 +549,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cacheFile.writeText(state.fileEditorContent)
 
         viewModelScope.launch(Dispatchers.IO) {
-            val session = currentFileManagerSession() ?: return@launch
+            val clientId = state.fileManagerClientId ?: return@launch
             beginTransfer("上传中：${state.fileEditorRemotePath}")
-            val ok = session.uploadFile(state.fileEditorRemotePath, cacheFile) { done, total ->
+            val ok = fileManagerUseCase.uploadFile(clientId, state.fileEditorRemotePath, cacheFile) { done, total ->
                 reportTransfer(done, total)
             }
             endTransfer()
@@ -552,7 +560,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 FrpLogBus.append("[编辑器] 上传成功：${state.fileEditorRemotePath}")
                 refreshCurrentDirectory()
             } else {
-                FrpLogBus.append("[编辑器] 上传失败：${state.fileEditorRemotePath}")
+                logTransferFailure(clientId, "[编辑器] 上传失败：${state.fileEditorRemotePath}")
             }
         }
     }
@@ -565,7 +573,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             scope = viewModelScope,
             uiState = _uiState,
             targetId = target.id,
-            getSession = ::currentSession,
+            captureUseCase = captureUseCase,
             cacheDir = getApplication<Application>().cacheDir
         )
     }
@@ -588,7 +596,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uiState = _uiState,
             targetId = target.id,
             cameraId = cameraId,
-            getSession = ::currentSession,
+            captureUseCase = captureUseCase,
             appContext = getApplication<Application>(),
             copyAssetToFile = ::copyAssetToFile
         )
@@ -677,9 +685,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) {
             val remotePath = appendPath(_uiState.value.fileManagerPath, cleanName)
-            val session = currentFileManagerSession() ?: return@launch
+            val clientId = _uiState.value.fileManagerClientId ?: return@launch
             beginTransfer("上传中：$remotePath")
-            val ok = session.uploadFile(remotePath, localFile) { done, total ->
+            val ok = fileManagerUseCase.uploadFile(clientId, remotePath, localFile) { done, total ->
                 reportTransfer(done, total)
             }
             endTransfer()
@@ -687,7 +695,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 FrpLogBus.append("[文件管理] 上传成功：$remotePath")
                 refreshCurrentDirectory()
             } else {
-                FrpLogBus.append("[文件管理] 上传失败：$remotePath")
+                logTransferFailure(clientId, "[文件管理] 上传失败：$remotePath")
             }
         }
     }
@@ -696,15 +704,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         val remotePath = appendPath(state.fileManagerPath, item.name)
         val cacheFile = File(getApplication<Application>().cacheDir, "download_${state.fileManagerClientId}_${item.name}")
-        val session = currentFileManagerSession() ?: return
+        val clientId = state.fileManagerClientId ?: return
 
         beginTransfer("下载中：$remotePath")
-        when (session.downloadFile(remotePath, cacheFile) { done, total ->
+        when (fileManagerUseCase.downloadFile(clientId, remotePath, cacheFile) { done, total ->
             reportTransfer(done, total)
         }) {
             ClientSession.DownloadResult.Success -> FrpLogBus.append("[文件管理] 下载成功：$remotePath -> ${cacheFile.absolutePath}")
             ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[文件管理] 远程文件不存在：$remotePath")
-            ClientSession.DownloadResult.Failed -> FrpLogBus.append("[文件管理] 下载失败：$remotePath")
+            ClientSession.DownloadResult.Failed -> logTransferFailure(clientId, "[文件管理] 下载失败：$remotePath")
         }
         endTransfer()
     }
@@ -717,15 +725,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val outputDir = getApplication<Application>().getExternalFilesDir("downloads")
                 ?: getApplication<Application>().cacheDir
             val localFile = File(outputDir, item.name)
-            val session = currentFileManagerSession() ?: return@launch
+            val clientId = state.fileManagerClientId ?: return@launch
 
             beginTransfer("下载中：$remotePath")
-            when (session.downloadFile(remotePath, localFile) { done, total ->
+            when (fileManagerUseCase.downloadFile(clientId, remotePath, localFile) { done, total ->
                 reportTransfer(done, total)
             }) {
                 ClientSession.DownloadResult.Success -> FrpLogBus.append("[文件管理] 下载成功：$remotePath -> ${localFile.absolutePath}")
                 ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[文件管理] 远程文件不存在：$remotePath")
-                ClientSession.DownloadResult.Failed -> FrpLogBus.append("[文件管理] 下载失败：$remotePath")
+                ClientSession.DownloadResult.Failed -> logTransferFailure(clientId, "[文件管理] 下载失败：$remotePath")
             }
             endTransfer()
         }
@@ -746,12 +754,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!scriptExists) {
                 val localScript = ensureLocalUploadScriptFile() ?: return@launch
                 beginTransfer("上传中：$scriptRemotePath")
-                val uploadOk = session.uploadFile(scriptRemotePath, localScript) { done, total ->
+                val uploadOk = fileManagerUseCase.uploadFile(_uiState.value.fileManagerClientId ?: return@launch, scriptRemotePath, localScript) { done, total ->
                     reportTransfer(done, total)
                 }
                 endTransfer()
                 if (!uploadOk) {
-                    FrpLogBus.append("[大文件上传] upload.sh 上传失败：$scriptRemotePath")
+                    logTransferFailure(_uiState.value.fileManagerClientId ?: return@launch, "[大文件上传] upload.sh 上传失败：$scriptRemotePath")
                     return@launch
                 }
                 FrpLogBus.append("[大文件上传] upload.sh 上传成功：$scriptRemotePath")
@@ -773,10 +781,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         val remotePath = appendPath(state.fileManagerPath, item.name)
         val cacheFile = File(getApplication<Application>().cacheDir, "editor_${state.fileManagerClientId}_${item.name}.tmp")
-        val session = currentFileManagerSession() ?: return
+        val clientId = state.fileManagerClientId ?: return
 
         beginTransfer("下载中：$remotePath")
-        when (session.downloadFile(remotePath, cacheFile) { done, total ->
+        when (fileManagerUseCase.downloadFile(clientId, remotePath, cacheFile) { done, total ->
             reportTransfer(done, total)
         }) {
             ClientSession.DownloadResult.Success -> {
@@ -799,7 +807,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             ClientSession.DownloadResult.Failed -> {
-                FrpLogBus.append("[编辑器] 下载失败：$remotePath")
+                logTransferFailure(clientId, "[编辑器] 下载失败：$remotePath")
             }
         }
         endTransfer()
@@ -823,9 +831,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun executeFileManagerCommand(command: String): Boolean {
         val currentPath = _uiState.value.fileManagerPath
-        val fullCommand = "cd ${shellEscape(currentPath)} && $command"
-        val session = currentFileManagerSession() ?: return false
-        return session.runManagedCommand(fullCommand) != null
+        val clientId = _uiState.value.fileManagerClientId ?: return false
+        return fileManagerUseCase.executeInDirectory(clientId, currentPath, command) != null
     }
 
     private suspend fun loadDirectory(path: String, updatePath: Boolean = true) {
@@ -863,17 +870,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun currentSession(clientId: String): ClientSession? = networkThread.currentSession(clientId)
 
     private suspend fun runManagedCommand(clientId: String, command: String, timeoutMs: Long = 10_000L): String? {
-        val deferred = CompletableDeferred<String?>()
-        networkThread.post(NetCommand.RunManaged(clientId, command, timeoutMs, deferred))
-        return deferred.await()
+        return shellUseCase.runManagedCommand(clientId, command, timeoutMs)
     }
 
     private suspend fun listFiles(path: String): ClientSession.ListFilesResult {
         val clientId = _uiState.value.fileManagerClientId
             ?: return ClientSession.ListFilesResult.Failed("client not selected")
-        val deferred = CompletableDeferred<ClientSession.ListFilesResult>()
-        networkThread.post(NetCommand.ListFiles(clientId, path, deferred))
-        return deferred.await()
+        return fileManagerUseCase.listFiles(clientId, path)
     }
 
     private fun appendShellEcho(clientId: String, command: String) {
@@ -918,6 +921,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             state.copy(shellItemsByClient = state.shellItemsByClient + (clientId to current))
         }
+    }
+
+    private fun logTransferFailure(clientId: String, prefix: String) {
+        val session = currentSession(clientId)
+        val transferError = session?.lastTransferError
+        if (transferError == null) {
+            FrpLogBus.append(prefix)
+            return
+        }
+        FrpLogBus.append("$prefix [${transferError.code}] ${transferError.message}")
     }
 
     private fun resolveLocalPort(config: String): Int {

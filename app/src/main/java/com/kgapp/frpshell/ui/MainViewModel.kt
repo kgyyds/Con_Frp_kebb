@@ -50,7 +50,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         logInit(MODULE_UI, "MainViewModel 初始化开始")
+        startShellSender()
+        initScrcpyAsset(application)
+        observeNetworkEvents()
+        observeFrpEvents()
+        initializeStartupState()
+    }
 
+    private fun startShellSender() {
         // Shell 发送线程：只负责发送与立即回显，不等待返回。
         shellSendScope.launch {
             runCatching {
@@ -61,7 +68,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 logInit(MODULE_UI, "Shell 发送线程异常", it)
             }
         }
+    }
 
+    private fun initScrcpyAsset(application: Application) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val context = application.applicationContext
@@ -77,7 +86,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 logInit(MODULE_NETWORK, "scrcpy 资源初始化异常", it)
             }
         }
+    }
 
+    private fun observeNetworkEvents() {
         // Shell 接收线程：独立消费网络事件，按 END 边界聚合命令输出。
         viewModelScope.launch(Dispatchers.Default) {
             runCatching {
@@ -94,10 +105,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
                                     requestedIds.add(id)
                                     launch(Dispatchers.IO) {
-                                        val modelResult = runManagedCommand(id, "getprop ro.product.model")
-                                        val modelName = modelResult?.lines()?.firstOrNull()?.trim()
-                                        val serialResult = runManagedCommand(id, "getprop ro.serialno")
-                                        val serialNo = serialResult?.lines()?.firstOrNull()?.trim()
+                                        val registration = networkThread.currentSession(id)?.registrationInfo
+                                        val modelName = registration?.deviceName
+                                        val serialNo = registration?.deviceId
 
                                         if (!modelName.isNullOrBlank() || !serialNo.isNullOrBlank()) {
                                             _uiState.update {
@@ -145,7 +155,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 logInit(MODULE_NETWORK, "网络事件订阅异常", it)
             }
         }
+    }
 
+    private fun observeFrpEvents() {
         viewModelScope.launch {
             runCatching {
                 frpThread.events.collect { event ->
@@ -157,7 +169,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 logInit(MODULE_FRP, "FRP 状态订阅异常", it)
             }
         }
+    }
 
+    private fun initializeStartupState() {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 logInit(MODULE_UI, "开始加载启动配置")

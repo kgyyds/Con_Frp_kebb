@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Column
@@ -7,7 +7,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.kgapp.frpshell.model.ShellTarget
+import com.kgapp.frpshellpro.model.ShellTarget
 
 @Composable
 fun DrawerContent(

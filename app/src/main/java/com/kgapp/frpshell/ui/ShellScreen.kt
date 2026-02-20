@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -33,8 +33,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.kgapp.frpshell.frp.FrpLogBus
-import com.kgapp.frpshell.model.ShellTarget
+import com.kgapp.frpshellpro.frp.FrpLogBus
+import com.kgapp.frpshellpro.model.ShellTarget
 
 @Composable
 fun ShellScreen(

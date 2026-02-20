@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui.theme
+package com.kgapp.frpshellpro.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme

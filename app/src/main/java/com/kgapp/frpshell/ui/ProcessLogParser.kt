@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 object ProcessLogParser {
     fun parse(content: String): List<ClientProcessInfo> {

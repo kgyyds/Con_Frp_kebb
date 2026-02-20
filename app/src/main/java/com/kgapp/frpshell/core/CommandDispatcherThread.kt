@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.core
+package com.kgapp.frpshellpro.core
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi

@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import android.content.Context
 import android.net.Uri
@@ -49,9 +49,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.kgapp.frpshell.frp.FrpLogBus
-import com.kgapp.frpshell.model.ShellTarget
-import com.kgapp.frpshell.ui.theme.FrpShellTheme
+import com.kgapp.frpshellpro.frp.FrpLogBus
+import com.kgapp.frpshellpro.model.ShellTarget
+import com.kgapp.frpshellpro.ui.theme.FrpShellTheme
 import kotlinx.coroutines.launch
 
 

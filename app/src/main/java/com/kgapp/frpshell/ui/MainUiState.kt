@@ -1,7 +1,7 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
-import com.kgapp.frpshell.model.ShellTarget
-import com.kgapp.frpshell.ui.theme.ThemeMode
+import com.kgapp.frpshellpro.model.ShellTarget
+import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
 enum class ScreenDestination {
     Main,

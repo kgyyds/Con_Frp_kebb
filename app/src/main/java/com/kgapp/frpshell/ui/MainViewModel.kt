@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -100,36 +101,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Shell 接收线程：独立消费网络事件，按 END 边界聚合命令输出。
         viewModelScope.launch(Dispatchers.Default) {
             runCatching {
-                val requestedIds = mutableSetOf<String>()
                 networkThread.events.collect { event ->
                     when (event) {
                         is NetEvent.ShellOutputLine -> appendShellOutput(event.clientId, event.line)
                         is NetEvent.ShellCommandEnded -> finishShellCommand(event.clientId)
                         is NetEvent.ClientsChanged -> {
                             val ids = event.clientIds
-                            requestedIds.retainAll(ids.toSet())
 
                             ids.forEach { id ->
-                                if (!requestedIds.contains(id) && !_uiState.value.clientModels.containsKey(id)) {
-                                    requestedIds.add(id)
-                                    launch(Dispatchers.IO) {
-                                        val registration = networkThread.currentSession(id)?.registrationInfo
-                                        val modelName = registration?.deviceName
-                                        val serialNo = registration?.deviceId
-
-                                        if (!modelName.isNullOrBlank() || !serialNo.isNullOrBlank()) {
-                                            _uiState.update {
-                                                it.copy(
-                                                    clientModels = it.clientModels + (
-                                                        id to ClientDisplayInfo(
-                                                            modelName = modelName?.takeIf { name -> name.isNotBlank() } ?: id,
-                                                            serialNo = serialNo?.takeIf { serial -> serial.isNotBlank() } ?: id
-                                                        )
-                                                    )
-                                                )
-                                            }
-                                        }
-                                    }
+                                val display = _uiState.value.clientModels[id]
+                                val needsRefresh = display == null || display.modelName == id || display.serialNo == id
+                                if (needsRefresh) {
+                                    launch(Dispatchers.IO) { refreshClientDisplayInfo(id) }
                                 }
                             }
 
@@ -161,6 +144,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }.onFailure {
                 logInit(MODULE_NETWORK, "网络事件订阅异常", it)
+            }
+        }
+    }
+
+    private suspend fun refreshClientDisplayInfo(clientId: String) {
+        repeat(10) { attempt ->
+            val registration = networkThread.currentSession(clientId)?.registrationInfo
+            val modelName = registration?.deviceName?.takeIf { it.isNotBlank() }
+            val serialNo = registration?.deviceId?.takeIf { it.isNotBlank() }
+
+            if (modelName != null || serialNo != null) {
+                _uiState.update {
+                    it.copy(
+                        clientModels = it.clientModels + (
+                            clientId to ClientDisplayInfo(
+                                modelName = modelName ?: clientId,
+                                serialNo = serialNo ?: clientId
+                            )
+                        )
+                    )
+                }
+                return
+            }
+
+            if (attempt < 9) {
+                delay(300)
             }
         }
     }

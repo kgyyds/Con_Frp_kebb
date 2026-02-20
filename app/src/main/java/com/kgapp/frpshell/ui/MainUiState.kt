@@ -1,6 +1,10 @@
 package com.kgapp.frpshellpro.ui
 
 import com.kgapp.frpshellpro.model.ShellTarget
+import com.kgapp.frpshellpro.ui.state.CaptureUiState
+import com.kgapp.frpshellpro.ui.state.FileManagerUiState
+import com.kgapp.frpshellpro.ui.state.FrpUiState
+import com.kgapp.frpshellpro.ui.state.ShellUiState
 import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
 enum class ScreenDestination {
@@ -20,6 +24,15 @@ data class MainUiState(
     val localPort: Int = 23231,
     val shellFontSizeSp: Float = SettingsStore.DEFAULT_FONT_SIZE_SP,
     val uploadScriptContent: String = "",
+    val recordStreamHost: String = SettingsStore.DEFAULT_RECORD_STREAM_HOST,
+    val recordStreamPort: String = SettingsStore.DEFAULT_RECORD_STREAM_PORT.toString(),
+    val recordStartTemplate: String = SettingsStore.DEFAULT_RECORD_START_TEMPLATE,
+    val recordStopTemplate: String = SettingsStore.DEFAULT_RECORD_STOP_TEMPLATE,
+    val recordConfigErrorMessage: String? = null,
+    val shellUiState: ShellUiState = ShellUiState(),
+    val fileManagerUiState: FileManagerUiState = FileManagerUiState(),
+    val captureUiState: CaptureUiState = CaptureUiState(),
+    val frpUiState: FrpUiState = FrpUiState(),
     val frpRunning: Boolean = false,
     val fileManagerVisible: Boolean = false,
     val processListVisible: Boolean = false,

@@ -29,18 +29,32 @@ fun SettingsScreen(
     themeMode: ThemeMode,
     shellFontSizeSp: Float,
     uploadScriptContent: String,
+    recordStreamHost: String,
+    recordStreamPort: String,
+    recordStartTemplate: String,
+    recordStopTemplate: String,
     firstLaunchFlow: Boolean,
     onConfigChanged: (String) -> Unit,
     onUseSuChanged: (Boolean) -> Unit,
     onThemeModeChanged: (ThemeMode) -> Unit,
     onShellFontSizeChanged: (Float) -> Unit,
     onUploadScriptContentChanged: (String) -> Unit,
+    onRecordStreamHostChanged: (String) -> Unit,
+    onRecordStreamPortChanged: (String) -> Unit,
+    onRecordStartTemplateChanged: (String) -> Unit,
+    onRecordStopTemplateChanged: (String) -> Unit,
     onSaveUploadScript: () -> Unit,
     onSave: () -> Unit,
     onSaveAndRestart: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
+    val hostError = recordStreamHost.trim().isBlank()
+    val portValue = recordStreamPort.trim().toIntOrNull()
+    val portError = portValue == null || portValue !in 1..65535
+    val startTemplateError = recordStartTemplate.isBlank() || !recordStartTemplate.contains("{host}") || !recordStartTemplate.contains("{port}")
+    val stopTemplateError = recordStopTemplate.isBlank()
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -99,6 +113,48 @@ fun SettingsScreen(
                 valueRange = 12f..24f
             )
         }
+
+        OutlinedTextField(
+            value = recordStreamHost,
+            onValueChange = onRecordStreamHostChanged,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("录屏推流地址") },
+            isError = hostError,
+            supportingText = { if (hostError) Text("地址不能为空") }
+        )
+
+        OutlinedTextField(
+            value = recordStreamPort,
+            onValueChange = onRecordStreamPortChanged,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("录屏推流端口") },
+            isError = portError,
+            supportingText = { if (portError) Text("端口必须为 1~65535") }
+        )
+
+        OutlinedTextField(
+            value = recordStartTemplate,
+            onValueChange = onRecordStartTemplateChanged,
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 3,
+            label = { Text("录屏启动命令模板") },
+            isError = startTemplateError,
+            supportingText = {
+                if (startTemplateError) {
+                    Text("模板不能为空，且必须包含 {host} 与 {port}")
+                }
+            }
+        )
+
+        OutlinedTextField(
+            value = recordStopTemplate,
+            onValueChange = onRecordStopTemplateChanged,
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2,
+            label = { Text("录屏停止命令模板") },
+            isError = stopTemplateError,
+            supportingText = { if (stopTemplateError) Text("停止模板不能为空") }
+        )
 
         OutlinedTextField(
             value = configContent,

@@ -14,6 +14,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -22,6 +23,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.File
+import java.io.InputStream
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
@@ -31,7 +33,8 @@ class ClientSession(
     val id: String,
     private val socket: Socket,
     private val scope: CoroutineScope,
-    private val onClosed: (String) -> Unit
+    private val onClosed: (String) -> Unit,
+    private val maxBinaryFrameSize: Int = DEFAULT_MAX_BINARY_FRAME_SIZE
 ) {
     private val _output = MutableStateFlow("")
     val output: StateFlow<String> = _output.asStateFlow()
@@ -90,11 +93,12 @@ class ClientSession(
         val safeRemotePath = sanitizeRemotePath(remotePath) ?: return false
         if (!localFile.exists() || !localFile.isFile) return false
         if (localFile.length() > Int.MAX_VALUE) {
-            appendOutput("[upload failed] file too large")
+            reportTransferError(TransferErrorCode.INVALID_LENGTH, "upload file too large: ${localFile.length()}")
             return false
         }
 
         return ioMutex.withLock {
+            lastTransferError = null
             val total = localFile.length()
             withSocketTimeout(FILE_TRANSFER_TIMEOUT_MS) {
                 sendJson(
@@ -103,14 +107,20 @@ class ClientSession(
                         .put("path", safeRemotePath)
                 )
 
-                val payload = localFile.readBytes()
-                sendBinary(payload)
-                onProgress?.invoke(total, total)
+                localFile.inputStream().use { fileInput ->
+                    sendBinary(fileInput, total) { done -> onProgress?.invoke(done, total) }
+                }
 
                 val response = readJsonFrame() ?: return@withSocketTimeout false
-                if (response.optString("type") != "uploadfile") return@withSocketTimeout false
+                if (response.optString("type") != "uploadfile") {
+                    reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, "upload response type mismatch")
+                    return@withSocketTimeout false
+                }
                 response.optString("error").isBlank()
-            } ?: false
+            } ?: run {
+                reportTransferError(TransferErrorCode.TIMEOUT, "upload timeout")
+                false
+            }
         }
     }
 
@@ -118,6 +128,7 @@ class ClientSession(
         val safeRemotePath = sanitizeRemotePath(remotePath) ?: return DownloadResult.Failed
 
         return ioMutex.withLock {
+            lastTransferError = null
             withSocketTimeout(FILE_TRANSFER_TIMEOUT_MS) {
                 sendJson(
                     JSONObject()
@@ -139,16 +150,23 @@ class ClientSession(
                     }
                 }
 
-                val frame = readFrame() ?: return@withSocketTimeout DownloadResult.Failed
-                if (frame.type != TYPE_BINARY) return@withSocketTimeout DownloadResult.Failed
+                val header = readFrameHeader() ?: return@withSocketTimeout DownloadResult.Failed
+                if (header.type != TYPE_BINARY) {
+                    reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, "download expected binary frame, got ${header.type}")
+                    skipBytes(header.length)
+                    return@withSocketTimeout DownloadResult.Failed
+                }
 
-                val total = frame.payload.size.toLong()
+                val total = header.length.toLong()
                 onProgress?.invoke(0, total)
                 targetFile.parentFile?.mkdirs()
-                targetFile.outputStream().use { it.write(frame.payload) }
+                writeFrameToFile(targetFile, header.length) { done -> onProgress?.invoke(done, total) }
                 onProgress?.invoke(total, total)
                 DownloadResult.Success
-            } ?: DownloadResult.Failed
+            } ?: run {
+                reportTransferError(TransferErrorCode.TIMEOUT, "download timeout")
+                DownloadResult.Failed
+            }
         }
     }
 
@@ -239,6 +257,31 @@ class ClientSession(
         writeFrame(TYPE_BINARY, payload)
     }
 
+    private fun sendBinary(input: InputStream, length: Long, onProgress: ((Long) -> Unit)? = null) {
+        if (length < 0 || length > Int.MAX_VALUE) {
+            reportTransferError(TransferErrorCode.INVALID_LENGTH, "binary frame length invalid: $length")
+            throw IllegalArgumentException("invalid binary length: $length")
+        }
+
+        outputStream.writeInt(length.toInt())
+        outputStream.writeByte(TYPE_BINARY)
+
+        val buffer = ByteArray(STREAM_BUFFER_SIZE)
+        var written = 0L
+        while (written < length) {
+            val toRead = minOf(buffer.size.toLong(), length - written).toInt()
+            val read = input.read(buffer, 0, toRead)
+            if (read <= 0) {
+                reportTransferError(TransferErrorCode.IO_INTERRUPTED, "input stream ended before expected length")
+                throw EOFException("unexpected EOF while sending binary frame")
+            }
+            outputStream.write(buffer, 0, read)
+            written += read
+            onProgress?.invoke(written)
+        }
+        outputStream.flush()
+    }
+
     private fun writeFrame(type: Int, payload: ByteArray) {
         require(payload.size <= Int.MAX_VALUE)
         outputStream.writeInt(payload.size)
@@ -248,19 +291,35 @@ class ClientSession(
     }
 
     private fun readJsonFrame(): JSONObject? {
-        val frame = readFrame() ?: return null
-        if (frame.type != TYPE_JSON) return null
-        return runCatching { JSONObject(String(frame.payload, StandardCharsets.UTF_8)) }.getOrNull()
+        val header = readFrameHeader() ?: return null
+        if (header.type != TYPE_JSON) {
+            reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, "expected json frame, got ${header.type}")
+            skipBytes(header.length)
+            return null
+        }
+        val payload = ByteArray(header.length)
+        return runCatching {
+            input.readFully(payload)
+            JSONObject(String(payload, StandardCharsets.UTF_8))
+        }.onFailure {
+            reportTransferError(TransferErrorCode.IO_INTERRUPTED, "read json payload failed: ${it.message}")
+        }.getOrNull()
     }
 
-    private fun readFrame(): Frame? {
+    private fun readFrameHeader(): FrameHeader? {
         return try {
             val length = input.readInt()
-            if (length < 0 || length > MAX_FRAME_SIZE) return null
+            if (length < 0) {
+                reportTransferError(TransferErrorCode.INVALID_LENGTH, "negative frame length: $length")
+                return null
+            }
             val type = input.readUnsignedByte()
-            val payload = ByteArray(length)
-            input.readFully(payload)
-            Frame(type = type, payload = payload)
+            val max = if (type == TYPE_JSON) MAX_JSON_FRAME_SIZE else maxBinaryFrameSize
+            if (length > max) {
+                reportTransferError(TransferErrorCode.INVALID_LENGTH, "frame length overflow, type=$type length=$length max=$max")
+                return null
+            }
+            FrameHeader(type = type, length = length)
         } catch (_: SocketTimeoutException) {
             null
         } catch (_: EOFException) {
@@ -270,6 +329,43 @@ class ClientSession(
             close()
             null
         }
+    }
+
+    private fun writeFrameToFile(targetFile: File, length: Int, onProgress: ((Long) -> Unit)? = null) {
+        val buffer = ByteArray(STREAM_BUFFER_SIZE)
+        var remaining = length
+        var done = 0L
+        targetFile.outputStream().use { fileOut ->
+            while (remaining > 0) {
+                val chunkSize = minOf(buffer.size, remaining)
+                val read = input.read(buffer, 0, chunkSize)
+                if (read <= 0) {
+                    reportTransferError(TransferErrorCode.IO_INTERRUPTED, "download frame interrupted")
+                    throw EOFException("unexpected EOF while reading binary payload")
+                }
+                fileOut.write(buffer, 0, read)
+                remaining -= read
+                done += read
+                onProgress?.invoke(done)
+            }
+        }
+    }
+
+    private fun skipBytes(length: Int) {
+        var remaining = length
+        val buffer = ByteArray(STREAM_BUFFER_SIZE)
+        while (remaining > 0) {
+            val read = input.read(buffer, 0, minOf(remaining, buffer.size))
+            if (read <= 0) return
+            remaining -= read
+        }
+    }
+
+    private fun reportTransferError(code: TransferErrorCode, message: String) {
+        lastTransferError = TransferError(code, message)
+        val text = "[$TRANSFER_LOG_TAG][${code.name}] $message"
+        appendOutput(text)
+        Log.w(LOG_TAG, text)
     }
 
     private fun <T> withSocketTimeout(timeoutMs: Long, block: () -> T): T? {
@@ -314,7 +410,20 @@ class ClientSession(
         val arch: String
     )
 
-    private data class Frame(val type: Int, val payload: ByteArray)
+    @Volatile
+    var lastTransferError: TransferError? = null
+        private set
+
+    data class TransferError(val code: TransferErrorCode, val message: String)
+
+    enum class TransferErrorCode {
+        TIMEOUT,
+        INVALID_LENGTH,
+        IO_INTERRUPTED,
+        PROTOCOL_MISMATCH
+    }
+
+    private data class FrameHeader(val type: Int, val length: Int)
 
     private data class ExecResult(
         val output: String? = null,
@@ -351,6 +460,10 @@ class ClientSession(
         private const val FILE_TRANSFER_TIMEOUT_MS = 180_000L
         private const val REGISTRATION_TIMEOUT_MS = 5_000L
         private const val MAX_REMOTE_PATH = 4096
-        private const val MAX_FRAME_SIZE = 32 * 1024 * 1024
+        private const val MAX_JSON_FRAME_SIZE = 1024 * 1024
+        private const val DEFAULT_MAX_BINARY_FRAME_SIZE = 256 * 1024 * 1024
+        private const val STREAM_BUFFER_SIZE = 8 * 1024
+        private const val TRANSFER_LOG_TAG = "ClientTransfer"
+        private const val LOG_TAG = "ClientSession"
     }
 }

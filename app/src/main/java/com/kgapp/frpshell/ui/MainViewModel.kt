@@ -189,11 +189,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val themeMode = settingsStore.getThemeMode()
                 val shellFontSizeSp = settingsStore.getShellFontSizeSp().coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
                 val uploadScriptContent = loadUploadScriptContent()
+                val recordStreamHost = settingsStore.getRecordStreamHost()
+                val recordStreamPort = settingsStore.getRecordStreamPort()
+                val recordStartTemplate = settingsStore.getRecordStartTemplate()
+                val recordStopTemplate = settingsStore.getRecordStopTemplate()
 
                 if (!initialized) {
                     settingsStore.setUseSu(useSuDefault)
                     settingsStore.setThemeMode(ThemeMode.SYSTEM)
                     settingsStore.setShellFontSizeSp(SettingsStore.DEFAULT_FONT_SIZE_SP)
+                    settingsStore.setRecordStreamHost(SettingsStore.DEFAULT_RECORD_STREAM_HOST)
+                    settingsStore.setRecordStreamPort(SettingsStore.DEFAULT_RECORD_STREAM_PORT.toString())
+                    settingsStore.setRecordStartTemplate(SettingsStore.DEFAULT_RECORD_START_TEMPLATE)
+                    settingsStore.setRecordStopTemplate(SettingsStore.DEFAULT_RECORD_STOP_TEMPLATE)
                     settingsStore.setInitialized(true)
                 }
 
@@ -211,7 +219,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         themeMode = themeMode,
                         localPort = localPort,
                         shellFontSizeSp = shellFontSizeSp,
-                        uploadScriptContent = uploadScriptContent
+                        uploadScriptContent = uploadScriptContent,
+                        recordStreamHost = recordStreamHost,
+                        recordStreamPort = recordStreamPort,
+                        recordStartTemplate = recordStartTemplate,
+                        recordStopTemplate = recordStopTemplate
                     )
                 }
 
@@ -289,6 +301,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(uploadScriptContent = content) }
     }
 
+    fun onRecordStreamHostChanged(value: String) {
+        _uiState.update { it.copy(recordStreamHost = value) }
+    }
+
+    fun onRecordStreamPortChanged(value: String) {
+        _uiState.update { it.copy(recordStreamPort = value) }
+    }
+
+    fun onRecordStartTemplateChanged(value: String) {
+        _uiState.update { it.copy(recordStartTemplate = value) }
+    }
+
+    fun onRecordStopTemplateChanged(value: String) {
+        _uiState.update { it.copy(recordStopTemplate = value) }
+    }
+
+    fun dismissRecordConfigError() {
+        _uiState.update { it.copy(recordConfigErrorMessage = null) }
+    }
+
     fun saveUploadScript() {
         val scriptContent = _uiState.value.uploadScriptContent
         viewModelScope.launch(Dispatchers.IO) {
@@ -324,6 +356,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore.setUseSu(state.useSu)
         settingsStore.setThemeMode(state.themeMode)
         settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
+        settingsStore.setRecordStreamHost(state.recordStreamHost.trim())
+        settingsStore.setRecordStreamPort(state.recordStreamPort.trim())
+        settingsStore.setRecordStartTemplate(state.recordStartTemplate)
+        settingsStore.setRecordStopTemplate(state.recordStopTemplate)
 
         val localPort = resolveLocalPort(state.configContent)
         networkThread.post(NetCommand.StartServer(localPort))
@@ -340,6 +376,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore.setUseSu(state.useSu)
         settingsStore.setThemeMode(state.themeMode)
         settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
+        settingsStore.setRecordStreamHost(state.recordStreamHost.trim())
+        settingsStore.setRecordStreamPort(state.recordStreamPort.trim())
+        settingsStore.setRecordStartTemplate(state.recordStartTemplate)
+        settingsStore.setRecordStopTemplate(state.recordStopTemplate)
 
         val localPort = resolveLocalPort(state.configContent)
         networkThread.post(NetCommand.StartServer(localPort))
@@ -368,6 +408,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopFrp() {
         dispatcher.post(AppCommand.StopFrp)
+    }
+
+    fun startRecord() {
+        val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
+        val state = _uiState.value
+        val error = shellUseCase.validateRecordConfig(
+            host = state.recordStreamHost,
+            portText = state.recordStreamPort,
+            startTemplate = state.recordStartTemplate,
+            stopTemplate = state.recordStopTemplate
+        )
+        if (error != null) {
+            _uiState.update { it.copy(recordConfigErrorMessage = error) }
+            FrpLogBus.append("[录屏] 启动失败：$error")
+            return
+        }
+
+        settingsStore.setRecordStreamHost(state.recordStreamHost.trim())
+        settingsStore.setRecordStreamPort(state.recordStreamPort.trim())
+        settingsStore.setRecordStartTemplate(state.recordStartTemplate)
+        settingsStore.setRecordStopTemplate(state.recordStopTemplate)
+
+        val command = shellUseCase.buildStartRecordCommand(
+            host = state.recordStreamHost,
+            portText = state.recordStreamPort,
+            startTemplate = state.recordStartTemplate
+        )
+        appendShellEcho(target.id, command)
+        shellSendChannel.trySend(ShellSendRequest(target.id, command))
+    }
+
+    fun stopRecord() {
+        val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
+        val state = _uiState.value
+        val error = shellUseCase.validateRecordConfig(
+            host = state.recordStreamHost,
+            portText = state.recordStreamPort,
+            startTemplate = state.recordStartTemplate,
+            stopTemplate = state.recordStopTemplate
+        )
+        if (error != null) {
+            _uiState.update { it.copy(recordConfigErrorMessage = error) }
+            FrpLogBus.append("[录屏] 停止失败：$error")
+            return
+        }
+
+        val command = shellUseCase.buildStopRecordCommand(state.recordStopTemplate)
+        appendShellEcho(target.id, command)
+        shellSendChannel.trySend(ShellSendRequest(target.id, command))
     }
 
     fun sendCommand(command: String) {

@@ -469,12 +469,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openFileManager() {
         val target = _uiState.value.selectedTarget as? ShellTarget.Client ?: return
         _uiState.update {
-            it.copy(fileManagerVisible = true, fileEditorVisible = false, processListVisible = false, processPendingKill = null, fileManagerClientId = target.id, fileManagerPath = "/", fileManagerFiles = emptyList())
+            it.copy(
+                fileManagerVisible = true,
+                fileEditorVisible = false,
+                processListVisible = false,
+                processPendingKill = null,
+                fileManagerClientId = target.id,
+                fileManagerPath = "/",
+                fileManagerFiles = emptyList(),
+                fileManagerErrorMessage = null
+            )
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val output = executeFileManagerCommandAndGetOutput("cd / && ls -F") ?: return@launch
-            _uiState.update { it.copy(fileManagerFiles = LsFParser.parse(output)) }
+            loadDirectory("/", updatePath = false)
         }
     }
 
@@ -486,6 +494,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 fileManagerClientId = null,
                 fileManagerPath = "/",
                 fileManagerFiles = emptyList(),
+                fileManagerErrorMessage = null,
                 fileEditorRemotePath = "",
                 fileEditorCachePath = "",
                 fileEditorOriginalContent = "",
@@ -602,13 +611,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun fileManagerOpen(item: RemoteFileItem) {
         if (item.type == RemoteFileType.Directory) {
             viewModelScope.launch(Dispatchers.IO) {
-                val output = executeFileManagerCommandAndGetOutput("cd ${shellEscape(item.name)} && ls -F") ?: return@launch
-                _uiState.update { state ->
-                    state.copy(
-                        fileManagerPath = appendPath(state.fileManagerPath, item.name),
-                        fileManagerFiles = LsFParser.parse(output)
-                    )
-                }
+                val nextPath = item.path
+                loadDirectory(nextPath)
             }
             return
         }
@@ -623,13 +627,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (state.fileManagerPath == "/") return
 
         viewModelScope.launch(Dispatchers.IO) {
-            val output = executeFileManagerCommandAndGetOutput("cd .. && ls -F") ?: return@launch
-            _uiState.update {
-                it.copy(
-                    fileManagerPath = parentPath(it.fileManagerPath),
-                    fileManagerFiles = LsFParser.parse(output)
-                )
-            }
+            loadDirectory(parentPath(state.fileManagerPath))
         }
     }
 
@@ -820,16 +818,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun refreshCurrentDirectory() {
-        val output = executeFileManagerCommandAndGetOutput("ls -F") ?: return
-        _uiState.update { it.copy(fileManagerFiles = LsFParser.parse(output)) }
+        loadDirectory(_uiState.value.fileManagerPath, updatePath = false)
     }
 
-    private suspend fun executeFileManagerCommand(command: String): Boolean = executeFileManagerCommandAndGetOutput(command) != null
+    private suspend fun executeFileManagerCommand(command: String): Boolean {
+        val currentPath = _uiState.value.fileManagerPath
+        val fullCommand = "cd ${shellEscape(currentPath)} && $command"
+        val session = currentFileManagerSession() ?: return false
+        return session.runManagedCommand(fullCommand) != null
+    }
 
-    private suspend fun executeFileManagerCommandAndGetOutput(command: String): String? {
-        val session = currentFileManagerSession() ?: return null
-        return session.runManagedCommand(command).also {
-            if (it == null) FrpLogBus.append("[文件管理] 命令执行失败：$command")
+    private suspend fun loadDirectory(path: String, updatePath: Boolean = true) {
+        when (val result = listFiles(path)) {
+            is ClientSession.ListFilesResult.Success -> {
+                val files = result.items
+                    .map { RemoteFileItem(path = it.path, file = it.file) }
+                    .sortedWith(compareBy<RemoteFileItem> { it.type != RemoteFileType.Directory }.thenBy { it.name.lowercase() })
+                _uiState.update { state ->
+                    state.copy(
+                        fileManagerPath = if (updatePath) path else state.fileManagerPath,
+                        fileManagerFiles = files,
+                        fileManagerErrorMessage = null
+                    )
+                }
+            }
+
+            is ClientSession.ListFilesResult.Error -> {
+                FrpLogBus.append("[文件管理] 目录读取失败：$path, error=${result.message}")
+                _uiState.update { it.copy(fileManagerErrorMessage = result.message) }
+            }
+
+            is ClientSession.ListFilesResult.Failed -> {
+                FrpLogBus.append("[文件管理] 目录读取异常：$path, reason=${result.message}")
+                _uiState.update { it.copy(fileManagerErrorMessage = result.message) }
+            }
         }
     }
 
@@ -843,6 +865,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun runManagedCommand(clientId: String, command: String, timeoutMs: Long = 10_000L): String? {
         val deferred = CompletableDeferred<String?>()
         networkThread.post(NetCommand.RunManaged(clientId, command, timeoutMs, deferred))
+        return deferred.await()
+    }
+
+    private suspend fun listFiles(path: String): ClientSession.ListFilesResult {
+        val clientId = _uiState.value.fileManagerClientId
+            ?: return ClientSession.ListFilesResult.Failed("client not selected")
+        val deferred = CompletableDeferred<ClientSession.ListFilesResult>()
+        networkThread.post(NetCommand.ListFiles(clientId, path, deferred))
         return deferred.await()
     }
 

@@ -14,8 +14,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -40,6 +38,7 @@ import androidx.compose.ui.unit.dp
 fun FileManagerScreen(
     currentPath: String,
     files: List<RemoteFileItem>,
+    errorMessage: String?,
     contentPadding: PaddingValues,
     onRefresh: () -> Unit,
     onBackDirectory: () -> Unit,
@@ -71,6 +70,10 @@ fun FileManagerScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(text = "当前路径：$currentPath", style = MaterialTheme.typography.titleSmall)
+
+        errorMessage?.let {
+            Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onBackDirectory, enabled = currentPath != "/") {
@@ -121,8 +124,6 @@ fun FileManagerScreen(
                         Icon(
                             imageVector = when (item.type) {
                                 RemoteFileType.Directory -> Icons.Outlined.Folder
-                                RemoteFileType.Executable -> Icons.Outlined.Memory
-                                RemoteFileType.Symlink -> Icons.Outlined.Link
                                 RemoteFileType.File -> Icons.AutoMirrored.Outlined.Article
                             },
                             contentDescription = null

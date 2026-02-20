@@ -268,6 +268,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         FileManagerScreen(
                             currentPath = uiState.fileManagerPath,
                             files = uiState.fileManagerFiles,
+                            errorMessage = uiState.fileManagerErrorMessage,
                             contentPadding = padding,
                             onRefresh = vm::fileManagerRefresh,
                             onBackDirectory = vm::fileManagerBackDirectory,

@@ -84,6 +84,13 @@ class NetworkThread {
                     ?: com.kgapp.frpshellpro.server.ClientSession.DownloadResult.Failed
                 command.result.complete(result)
             }
+
+            is NetCommand.ListFiles -> {
+                val result = TcpServer.getClient(command.clientId)
+                    ?.listFiles(command.path)
+                    ?: com.kgapp.frpshellpro.server.ClientSession.ListFilesResult.Failed("client not found")
+                command.result.complete(result)
+            }
         }
     }
 

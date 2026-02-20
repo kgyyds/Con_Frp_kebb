@@ -38,6 +38,12 @@ sealed interface NetCommand {
         val progress: ((Long, Long) -> Unit)?,
         val result: CompletableDeferred<ClientSession.DownloadResult>
     ) : NetCommand
+
+    data class ListFiles(
+        val clientId: String,
+        val path: String,
+        val result: CompletableDeferred<ClientSession.ListFilesResult>
+    ) : NetCommand
 }
 
 sealed interface NetEvent {

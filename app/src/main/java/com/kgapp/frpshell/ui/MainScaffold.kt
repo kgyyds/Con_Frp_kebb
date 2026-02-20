@@ -193,10 +193,8 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                     onOpenSettings = vm::openSettings,
                                     onOpenCamera = vm::openCameraSelector,
                                     onCaptureScreen = vm::captureScreen,
-                                    onStartRecord = {
-                                        vm.sendCommand("nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc 47.113.126.123 40001 > /dev/null 2>&1 &")
-                                    },
-                                    onStopRecord = { vm.sendCommand("pkill -9 screenrecord") },
+                                    onStartRecord = vm::startRecord,
+                                    onStopRecord = vm::stopRecord,
                                     onOpenFileManager = vm::openFileManager,
                                     onOpenRunningPrograms = vm::openRunningPrograms,
                                     onRefreshProcessList = vm::refreshRunningPrograms,
@@ -216,12 +214,20 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             themeMode = uiState.themeMode,
                             shellFontSizeSp = uiState.shellFontSizeSp,
                             uploadScriptContent = uiState.uploadScriptContent,
+                            recordStreamHost = uiState.recordStreamHost,
+                            recordStreamPort = uiState.recordStreamPort,
+                            recordStartTemplate = uiState.recordStartTemplate,
+                            recordStopTemplate = uiState.recordStopTemplate,
                             firstLaunchFlow = uiState.firstLaunchFlow,
                             onConfigChanged = vm::onConfigChanged,
                             onUseSuChanged = vm::onUseSuChanged,
                             onThemeModeChanged = vm::onThemeModeChanged,
                             onShellFontSizeChanged = vm::onShellFontSizeChanged,
                             onUploadScriptContentChanged = vm::onUploadScriptContentChanged,
+                            onRecordStreamHostChanged = vm::onRecordStreamHostChanged,
+                            onRecordStreamPortChanged = vm::onRecordStreamPortChanged,
+                            onRecordStartTemplateChanged = vm::onRecordStartTemplateChanged,
+                            onRecordStopTemplateChanged = vm::onRecordStopTemplateChanged,
                             onSaveUploadScript = vm::saveUploadScript,
                             onSave = vm::saveConfigOnly,
                             onSaveAndRestart = vm::saveAndRestartFrp,
@@ -381,6 +387,19 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                     dismissButton = {
                         TextButton(onClick = vm::cancelKillProcess) {
                             Text("取消")
+                        }
+                    }
+                )
+            }
+
+            uiState.recordConfigErrorMessage?.let { message ->
+                AlertDialog(
+                    onDismissRequest = vm::dismissRecordConfigError,
+                    title = { Text("录屏配置无效") },
+                    text = { Text(message) },
+                    confirmButton = {
+                        TextButton(onClick = vm::dismissRecordConfigError) {
+                            Text("知道了")
                         }
                     }
                 )

@@ -15,14 +15,16 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.EOFException
 import java.io.File
-import java.io.FileOutputStream
 import java.net.Socket
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ClientSession(
@@ -37,196 +39,116 @@ class ClientSession(
     private val _shellEvents = MutableSharedFlow<ShellEvent>(extraBufferCapacity = 256)
     val shellEvents: SharedFlow<ShellEvent> = _shellEvents.asSharedFlow()
 
-    private var recvJob: Job? = null
+    @Volatile
+    var registrationInfo: RegistrationInfo? = null
+        private set
+
     private val closed = AtomicBoolean(false)
+    private val ioMutex = Mutex()
 
-    private val sendMutex = Mutex()
-    private val managedCommandMutex = Mutex()
-    private val transferMutex = Mutex()
-    private val transferStateMutex = Mutex()
+    private var recvJob: Job? = null
 
-    @Volatile
-    private var activeCapture: CaptureState? = null
-
-    @Volatile
-    private var receiveState: ReceiveState = ReceiveState.Idle
-
-    @Volatile
-    private var transferContext: TransferContext? = null
-
-    @Volatile
-    private var uploadResponse: CompletableDeferred<UploadSignal>? = null
+    private val input by lazy { DataInputStream(BufferedInputStream(socket.getInputStream())) }
+    private val outputStream by lazy { DataOutputStream(BufferedOutputStream(socket.getOutputStream())) }
 
     fun start() {
-        startReceiver()
+        recvJob = scope.launch(Dispatchers.IO) {
+            receiveRegistration()
+        }
     }
 
     fun send(command: String) {
         if (command.isBlank()) return
         scope.launch(Dispatchers.IO) {
             if (!isActive) return@launch
-            writeLineCommand(command, appendErrorToOutput = true)
+            val result = executeExec(command, DEFAULT_MANAGED_TIMEOUT_MS)
+            when {
+                result.error != null -> {
+                    appendOutput("[ERROR] ${result.error}")
+                    _shellEvents.tryEmit(ShellEvent.OutputLine("[ERROR] ${result.error}"))
+                }
+
+                !result.output.isNullOrEmpty() -> {
+                    result.output.lines().forEach { line ->
+                        if (line.isBlank()) return@forEach
+                        appendOutput(line)
+                        _shellEvents.tryEmit(ShellEvent.OutputLine(line))
+                    }
+                }
+            }
+            _shellEvents.tryEmit(ShellEvent.CommandEnd)
         }
     }
 
     suspend fun runManagedCommand(command: String, timeoutMs: Long = DEFAULT_MANAGED_TIMEOUT_MS): String? {
         if (command.isBlank()) return ""
-
-        return managedCommandMutex.withLock {
-            val token = UUID.randomUUID().toString().replace("-", "")
-            val beginMarker = "__FRPSHELL_BEGIN_${token}__"
-            val endMarker = "__FRPSHELL_END_${token}__"
-            val deferred = CompletableDeferred<String?>()
-
-            activeCapture = CaptureState(beginMarker = beginMarker, endMarker = endMarker, result = deferred)
-            val wrapped = "echo '$beginMarker'; $command; echo '$endMarker'"
-            val sent = writeLineCommand(wrapped, appendErrorToOutput = false)
-            if (!sent) {
-                activeCapture = null
-                deferred.complete(null)
-                return@withLock null
-            }
-
-            withTimeoutOrNull(timeoutMs) { deferred.await() }.also {
-                if (it == null) activeCapture = null
-            }
-        }
+        val result = executeExec(command, timeoutMs)
+        return result.output ?: result.error?.let { "[ERROR] $it" }
     }
 
     suspend fun uploadFile(remotePath: String, localFile: File, onProgress: ((Long, Long) -> Unit)? = null): Boolean {
         val safeRemotePath = sanitizeRemotePath(remotePath) ?: return false
         if (!localFile.exists() || !localFile.isFile) return false
-
-        return transferMutex.withLock {
-            val total = localFile.length()
-            onProgress?.invoke(0L, total)
-            receiveState = ReceiveState.UploadResponse
-
-            try {
-                val readyDeferred = CompletableDeferred<UploadSignal>()
-                uploadResponse = readyDeferred
-
-                val commandSent = sendMutex.withLock {
-                    runCatching {
-                        val output = socket.getOutputStream()
-                        val cmd = "upload ${shellEscape(safeRemotePath)} $total\n"
-                        output.write(cmd.toByteArray(StandardCharsets.UTF_8))
-                        output.flush()
-                    }.isSuccess
-                }
-                if (!commandSent) {
-                    uploadResponse = null
-                    return@withLock false
-                }
-
-                when (withTimeoutOrNull(UPLOAD_READY_TIMEOUT_MS) { readyDeferred.await() }) {
-                    UploadSignal.Ready -> Unit
-                    UploadSignal.Failed, null -> {
-                        uploadResponse = null
-                        return@withLock false
-                    }
-                    UploadSignal.Complete -> {
-                        uploadResponse = null
-                        return@withLock true
-                    }
-                }
-
-                val completeDeferred = CompletableDeferred<UploadSignal>()
-                uploadResponse = completeDeferred
-
-                val bodySent = sendMutex.withLock {
-                    runCatching {
-                        val output = socket.getOutputStream()
-                        var sent = 0L
-                        val buffer = ByteArray(UPLOAD_RAW_CHUNK_SIZE)
-                        localFile.inputStream().use { input ->
-                            while (true) {
-                                val read = input.read(buffer)
-                                if (read <= 0) break
-                                output.write(buffer, 0, read)
-                                sent += read
-                                onProgress?.invoke(sent, total)
-                            }
-                        }
-                        output.flush()
-                    }.isSuccess
-                }
-
-                if (!bodySent) {
-                    uploadResponse = null
-                    return@withLock false
-                }
-
-                when (withTimeoutOrNull(UPLOAD_COMPLETE_TIMEOUT_MS) { completeDeferred.await() }) {
-                    UploadSignal.Complete -> true
-                    UploadSignal.Failed, UploadSignal.Ready, null -> false
-                }
-            } finally {
-                uploadResponse = null
-                receiveState = ReceiveState.Idle
-            }
+        if (localFile.length() > Int.MAX_VALUE) {
+            appendOutput("[upload failed] file too large")
+            return false
         }
-    }
 
-    private fun consumeUploadResponseLine(line: String): Boolean {
-        val deferred = uploadResponse ?: return false
-        return when (line.trim()) {
-            "UPLOAD_READY" -> {
-                if (!deferred.isCompleted) deferred.complete(UploadSignal.Ready)
-                true
-            }
-            "UPLOAD_COMPLETE" -> {
-                if (!deferred.isCompleted) deferred.complete(UploadSignal.Complete)
-                true
-            }
-            "UPLOAD_FAILED" -> {
-                if (!deferred.isCompleted) deferred.complete(UploadSignal.Failed)
-                true
-            }
-            else -> {
-                if (line == CLIENT_COMMAND_END_MARKER) {
-                    return true
-                }
-                _output.value += "$line\n"
-                false
-            }
+        return ioMutex.withLock {
+            val total = localFile.length()
+            withSocketTimeout(FILE_TRANSFER_TIMEOUT_MS) {
+                sendJson(
+                    JSONObject()
+                        .put("type", "uploadfile")
+                        .put("path", safeRemotePath)
+                )
+
+                val payload = localFile.readBytes()
+                sendBinary(payload)
+                onProgress?.invoke(total, total)
+
+                val response = readJsonFrame() ?: return@withSocketTimeout false
+                if (response.optString("type") != "uploadfile") return@withSocketTimeout false
+                response.optString("error").isBlank()
+            } ?: false
         }
     }
 
     suspend fun downloadFile(remotePath: String, targetFile: File, onProgress: ((Long, Long) -> Unit)? = null): DownloadResult {
         val safeRemotePath = sanitizeRemotePath(remotePath) ?: return DownloadResult.Failed
-        
-        return transferMutex.withLock {
-            val deferred = CompletableDeferred<DownloadResult>()
-            val tmpFile = File(targetFile.parentFile ?: File("."), "${targetFile.name}.part")
-            tmpFile.parentFile?.mkdirs()
 
-            // Setup state before sending command
-            val ctx = TransferContext(
-                targetFile = targetFile,
-                tmpFile = tmpFile,
-                result = deferred,
-                onProgress = onProgress
-            )
-            transferContext = ctx
-            receiveState = ReceiveState.DownloadHeader
+        return ioMutex.withLock {
+            withSocketTimeout(FILE_TRANSFER_TIMEOUT_MS) {
+                sendJson(
+                    JSONObject()
+                        .put("type", "downloadfile")
+                        .put("path", safeRemotePath)
+                )
 
-            // Send command: download <path>
-            // Note: We don't use runManagedCommand because we need to hijack the receiver stream immediately
-            val cmd = "download ${shellEscape(safeRemotePath)}"
-            val sent = writeLineCommand(cmd, appendErrorToOutput = true)
-            if (!sent) {
-                resetTransferState("send command failed", cleanupFile = true)
-                return@withLock DownloadResult.Failed
-            }
+                val response = readJsonFrame() ?: return@withSocketTimeout DownloadResult.Failed
+                if (response.optString("type") != "downloadfile") {
+                    return@withSocketTimeout DownloadResult.Failed
+                }
 
-            // Wait for completion with timeout
-            withTimeoutOrNull(TRANSFER_TIMEOUT_MS) {
-                deferred.await()
-            } ?: run {
-                resetTransferState("timeout", cleanupFile = true)
-                DownloadResult.Failed
-            }
+                val error = response.optString("error")
+                if (error.isNotBlank()) {
+                    return@withSocketTimeout if (error.contains("not", ignoreCase = true)) {
+                        DownloadResult.NotFound
+                    } else {
+                        DownloadResult.Failed
+                    }
+                }
+
+                val frame = readFrame() ?: return@withSocketTimeout DownloadResult.Failed
+                if (frame.type != TYPE_BINARY) return@withSocketTimeout DownloadResult.Failed
+
+                val total = frame.payload.size.toLong()
+                onProgress?.invoke(0, total)
+                targetFile.parentFile?.mkdirs()
+                targetFile.outputStream().use { it.write(frame.payload) }
+                onProgress?.invoke(total, total)
+                DownloadResult.Success
+            } ?: DownloadResult.Failed
         }
     }
 
@@ -238,115 +160,105 @@ class ClientSession(
         onClosed(id)
     }
 
-    private fun startReceiver() {
-        recvJob = scope.launch(Dispatchers.IO) {
-            runCatching {
-                val input = socket.getInputStream()
-                val lineAccumulator = LineAccumulator(
-                    maxLineLength = MAX_LINE,
-                    onLineTooLong = { _output.value += "[line dropped] command too long\n" }
+    private suspend fun executeExec(command: String, timeoutMs: Long): ExecResult {
+        return ioMutex.withLock {
+            withSocketTimeout(timeoutMs) {
+                sendJson(
+                    JSONObject()
+                        .put("type", "exec")
+                        .put("cmd", command)
                 )
-                val temp = ByteArray(FILE_CHUNK_SIZE)
 
-                while (isActive) {
-                    val read = input.read(temp)
-                    if (read <= 0) break
-                    var offset = 0
-                    while (offset < read) {
-                        when (receiveState) {
-                            ReceiveState.Idle -> {
-                                val consumed = lineAccumulator.append(temp, offset, read - offset)
-                                offset += consumed
-                                while (true) {
-                                    val line = lineAccumulator.readLine() ?: break
-                                    if (!isExecutableLine(line)) {
-                                        continue
-                                    }
-                                    if (!consumeManagedLine(line)) {
-                                        if (line == CLIENT_COMMAND_END_MARKER) {
-                                            _shellEvents.tryEmit(ShellEvent.CommandEnd)
-                                        } else {
-                                            _output.value += "$line\n"
-                                            _shellEvents.tryEmit(ShellEvent.OutputLine(line))
-                                        }
-                                    }
-                                }
-                            }
-
-                            ReceiveState.DownloadHeader -> {
-                                offset += consumeDownloadHeader(temp, offset, read - offset)
-                            }
-
-                            ReceiveState.DownloadBody -> {
-                                offset += consumeDownloadBody(temp, offset, read - offset)
-                            }
-
-                            ReceiveState.UploadResponse -> {
-                                val consumed = lineAccumulator.append(temp, offset, read - offset)
-                                offset += consumed
-                                while (true) {
-                                    val line = lineAccumulator.readLine() ?: break
-                                    consumeUploadResponseLine(line)
-                                }
-                            }
-                        }
-                    }
+                val response = readJsonFrame()
+                if (response == null || response.optString("type") != "exec") {
+                    return@withSocketTimeout ExecResult(error = "invalid response")
                 }
-            }.onFailure {
-                resetTransferState(it.message ?: "receiver error", cleanupFile = true)
-                if (!closed.get()) {
-                    _output.value += "[session closed] ${it.message ?: "unknown"}\n"
+
+                val error = response.optString("error")
+                if (error.isNotBlank()) {
+                    return@withSocketTimeout ExecResult(error = error)
                 }
+
+                ExecResult(output = response.optString("output"))
+            } ?: ExecResult(error = "command timeout")
+        }
+    }
+
+    private suspend fun receiveRegistration() {
+        val info = ioMutex.withLock {
+            withSocketTimeout(REGISTRATION_TIMEOUT_MS) {
+                val json = readJsonFrame() ?: return@withSocketTimeout null
+                if (json.optString("type") != "register") return@withSocketTimeout null
+                RegistrationInfo(
+                    deviceName = json.optString("device_name", id),
+                    deviceId = json.optString("device_id", id),
+                    arch = json.optString("arch", "unknown")
+                )
             }
-            if (!closed.get()) close()
+        }
+
+        if (info != null) {
+            registrationInfo = info
+            appendOutput("[register] ${info.deviceName} (${info.deviceId})")
         }
     }
 
-    private suspend fun writeLineCommand(command: String, appendErrorToOutput: Boolean): Boolean {
-        return sendMutex.withLock {
-            runCatching {
-                socket.getOutputStream().bufferedWriter().apply {
-                    write(command)
-                    newLine()
-                    flush()
-                }
-            }.onFailure {
-                if (appendErrorToOutput) {
-                    _output.value += "[send failed] ${it.message ?: "unknown"}\n"
-                }
-            }.isSuccess
+    private fun sendJson(json: JSONObject) {
+        val payload = json.toString().toByteArray(StandardCharsets.UTF_8)
+        writeFrame(TYPE_JSON, payload)
+    }
+
+    private fun sendBinary(payload: ByteArray) {
+        writeFrame(TYPE_BINARY, payload)
+    }
+
+    private fun writeFrame(type: Int, payload: ByteArray) {
+        require(payload.size <= Int.MAX_VALUE)
+        outputStream.writeInt(payload.size)
+        outputStream.writeByte(type)
+        outputStream.write(payload)
+        outputStream.flush()
+    }
+
+    private fun readJsonFrame(): JSONObject? {
+        val frame = readFrame() ?: return null
+        if (frame.type != TYPE_JSON) return null
+        return runCatching { JSONObject(String(frame.payload, StandardCharsets.UTF_8)) }.getOrNull()
+    }
+
+    private fun readFrame(): Frame? {
+        return try {
+            val length = input.readInt()
+            if (length < 0 || length > MAX_FRAME_SIZE) return null
+            val type = input.readUnsignedByte()
+            val payload = ByteArray(length)
+            input.readFully(payload)
+            Frame(type = type, payload = payload)
+        } catch (_: SocketTimeoutException) {
+            null
+        } catch (_: EOFException) {
+            close()
+            null
+        } catch (_: Exception) {
+            close()
+            null
         }
     }
 
-    private fun consumeManagedLine(line: String): Boolean {
-        val capture = activeCapture ?: return false
-
-        if (line == CLIENT_COMMAND_END_MARKER) {
-            return true
+    private fun <T> withSocketTimeout(timeoutMs: Long, block: () -> T): T? {
+        val previous = socket.soTimeout
+        return try {
+            socket.soTimeout = timeoutMs.toInt()
+            block()
+        } catch (_: SocketTimeoutException) {
+            null
+        } finally {
+            runCatching { socket.soTimeout = previous }
         }
-
-        if (!capture.started) {
-            if (line == capture.beginMarker) {
-                capture.started = true
-                return true
-            }
-            return false
-        }
-
-        if (line == capture.endMarker) {
-            activeCapture = null
-            capture.result.complete(capture.buffer.toString())
-            return true
-        }
-
-        capture.buffer.append(line).append('\n')
-        return true
     }
 
-    private fun isExecutableLine(line: String): Boolean {
-        if (line.isBlank()) return false
-        if (line.length > MAX_LINE) return false
-        return line.none { it == '\u0000' }
+    private fun appendOutput(line: String) {
+        _output.value += "$line\n"
     }
 
     private fun sanitizeRemotePath(path: String): String? {
@@ -356,26 +268,18 @@ class ClientSession(
         return path
     }
 
-    private fun shellEscape(value: String): String = value.replace("'", "'\\''")
-
-    private fun longToBigEndian(value: Long): ByteArray {
-        val buffer = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
-        buffer.putLong(value)
-        return buffer.array()
-    }
-
-    private fun bigEndianToLong(bytes: ByteArray): Long {
-        return ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN).long
-    }
-
-    private data class CaptureState(
-        val beginMarker: String,
-        val endMarker: String,
-        val result: CompletableDeferred<String?>,
-        val buffer: StringBuilder = StringBuilder(),
-        var started: Boolean = false
+    data class RegistrationInfo(
+        val deviceName: String,
+        val deviceId: String,
+        val arch: String
     )
 
+    private data class Frame(val type: Int, val payload: ByteArray)
+
+    private data class ExecResult(
+        val output: String? = null,
+        val error: String? = null
+    )
 
     sealed interface ShellEvent {
         data class OutputLine(val line: String) : ShellEvent
@@ -388,219 +292,14 @@ class ClientSession(
         Failed
     }
 
-    private enum class UploadSignal {
-        Ready,
-        Complete,
-        Failed
-    }
-
     companion object {
+        private const val TYPE_JSON = 0x01
+        private const val TYPE_BINARY = 0x02
+
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
-        private const val FILE_CHUNK_SIZE = 4096
-        private const val UPLOAD_RAW_CHUNK_SIZE = 16384
-        private const val DOWNLOAD_RAW_CHUNK_SIZE = 3072
-        // Increased max line length to handle command echoes and long paths
-        private const val MAX_LINE = 8192
+        private const val FILE_TRANSFER_TIMEOUT_MS = 180_000L
+        private const val REGISTRATION_TIMEOUT_MS = 5_000L
         private const val MAX_REMOTE_PATH = 4096
-        private const val LINE_FEED: Byte = 0x0A
-        private const val CLIENT_COMMAND_END_MARKER = "<<END>>"
-        private const val TRANSFER_TIMEOUT_MS = 120_000L
-        private const val UPLOAD_READY_TIMEOUT_MS = 10_000L
-        private const val UPLOAD_COMPLETE_TIMEOUT_MS = 120_000L
-    }
-
-    private class LineAccumulator(
-        private val maxLineLength: Int,
-        private val onLineTooLong: () -> Unit
-    ) {
-        private val buffer = StringBuilder()
-        private var droppingLongLine = false
-
-        fun append(bytes: ByteArray, start: Int, length: Int): Int {
-            val chars = String(bytes, start, length, StandardCharsets.UTF_8)
-            chars.forEach { ch ->
-                if (droppingLongLine) {
-                    if (ch == '\n') {
-                        droppingLongLine = false
-                    }
-                    return@forEach
-                }
-
-                buffer.append(ch)
-                if (buffer.length > maxLineLength && !buffer.contains("\n")) {
-                    buffer.clear()
-                    droppingLongLine = true
-                    onLineTooLong()
-                }
-            }
-            return length
-        }
-
-        fun readLine(): String? {
-            val lineEnd = buffer.indexOf("\n")
-            if (lineEnd < 0) {
-                if (buffer.length > maxLineLength) {
-                    buffer.clear()
-                    droppingLongLine = true
-                    onLineTooLong()
-                }
-                return null
-            }
-
-            if (lineEnd > maxLineLength) {
-                buffer.delete(0, lineEnd + 1)
-                onLineTooLong()
-                return null
-            }
-
-            val line = buffer.substring(0, lineEnd).trimEnd('\r')
-            buffer.delete(0, lineEnd + 1)
-            return line
-        }
-    }
-
-    private enum class ReceiveState {
-        Idle,
-        DownloadHeader,
-        DownloadBody,
-        UploadResponse
-    }
-
-    private data class TransferContext(
-        val targetFile: File,
-        val tmpFile: File,
-        val headerBuffer: ByteArray = ByteArray(8),
-        var headerOffset: Int = 0,
-        var waitSeparator: Boolean = true,
-        var remaining: Long = 0,
-        var outputStream: FileOutputStream? = null,
-        val result: CompletableDeferred<DownloadResult>,
-        val onProgress: ((Long, Long) -> Unit)? = null,
-        var totalSize: Long = 0
-    )
-
-    private fun consumeDownloadHeader(buffer: ByteArray, start: Int, length: Int): Int {
-        val context = transferContext ?: return length
-        var offset = start
-        var remain = length
-
-        // 1. Read 8 bytes size (Big Endian)
-        if (context.headerOffset < 8) {
-            val copy = minOf(8 - context.headerOffset, remain)
-            System.arraycopy(buffer, offset, context.headerBuffer, context.headerOffset, copy)
-            context.headerOffset += copy
-            offset += copy
-            remain -= copy
-        }
-
-        if (context.headerOffset < 8) {
-            return length
-        }
-
-        // 2. Read newline separator
-        if (context.waitSeparator && remain > 0) {
-            val separator = buffer[offset]
-            offset += 1
-            remain -= 1
-            if (separator != LINE_FEED) {
-                resetTransferState("invalid download separator: $separator", cleanupFile = true)
-                return length // Consume all to stop processing
-            }
-            context.waitSeparator = false
-        }
-
-        if (context.waitSeparator) {
-            return length
-        }
-
-        // 3. Parse size and prepare for body
-        val size = bigEndianToLong(context.headerBuffer)
-        // Check for error condition (e.g. file not found might return size 0 or specific error code if protocol defines)
-        // Protocol says: 8 bytes size. If file not found, maybe server sends 0? Or maybe it doesn't send anything and we timeout?
-        // Assuming 0 means empty file.
-        
-        context.tmpFile.parentFile?.mkdirs()
-        context.outputStream = runCatching { FileOutputStream(context.tmpFile, false) }.getOrElse {
-            resetTransferState("open temp file failed: ${it.message}", cleanupFile = true)
-            return length // Consume all
-        }
-        context.remaining = size
-        context.totalSize = size
-        context.onProgress?.invoke(0, size)
-        
-        if (size == 0L) {
-             completeTransferState(DownloadResult.Success, cleanupFile = false)
-        } else {
-             receiveState = ReceiveState.DownloadBody
-        }
-        
-        return length - remain
-    }
-
-    private fun consumeDownloadBody(buffer: ByteArray, start: Int, length: Int): Int {
-        val context = transferContext ?: return length
-        if (context.remaining <= 0) {
-            completeTransferState(DownloadResult.Success, cleanupFile = false)
-            return 0
-        }
-
-        val writeSize = minOf(length.toLong(), context.remaining).toInt()
-        runCatching {
-            context.outputStream?.write(buffer, start, writeSize)
-            context.remaining -= writeSize
-            context.onProgress?.invoke(context.totalSize - context.remaining, context.totalSize)
-        }.onFailure {
-            resetTransferState("write download body failed: ${it.message}", cleanupFile = true)
-            return length
-        }
-
-        if (context.remaining == 0L) {
-            runCatching { context.outputStream?.flush() }
-            runCatching { context.outputStream?.close() }
-            context.outputStream = null
-            
-            if (context.tmpFile.exists() && !context.tmpFile.renameTo(context.targetFile)) {
-                // Try copy and delete if rename fails (e.g. across mount points)
-                val copyOk = runCatching { 
-                    context.tmpFile.copyTo(context.targetFile, overwrite = true)
-                    context.tmpFile.delete()
-                    true
-                }.getOrDefault(false)
-                
-                if (!copyOk) {
-                    resetTransferState("rename temp file failed", cleanupFile = true)
-                    return writeSize
-                }
-            }
-            completeTransferState(DownloadResult.Success, cleanupFile = false)
-        }
-        return writeSize
-    }
-
-    private fun completeTransferState(result: DownloadResult, cleanupFile: Boolean) {
-        val context = transferContext
-        if (context != null && !context.result.isCompleted) {
-            context.result.complete(result)
-        }
-        resetTransferState(null, cleanupFile)
-    }
-
-    private fun resetTransferState(reason: String?, cleanupFile: Boolean) {
-        val context = transferContext
-        if (context != null) {
-            runCatching { context.outputStream?.close() }
-            context.outputStream = null
-            if (cleanupFile) {
-                runCatching { context.tmpFile.delete() }
-            }
-            if (!context.result.isCompleted) {
-                context.result.complete(DownloadResult.Failed)
-            }
-        }
-        transferContext = null
-        receiveState = ReceiveState.Idle
-        if (reason != null) {
-            _output.value += "[transfer reset] $reason\n"
-        }
+        private const val MAX_FRAME_SIZE = 32 * 1024 * 1024
     }
 }

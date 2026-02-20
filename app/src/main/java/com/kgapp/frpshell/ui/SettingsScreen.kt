@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,7 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.kgapp.frpshell.ui.theme.ThemeMode
+import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
 @Composable
 fun SettingsScreen(

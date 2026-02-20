@@ -1,9 +1,9 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import android.app.Application
 import android.content.Context
-import com.kgapp.frpshell.frp.FrpLogBus
-import com.kgapp.frpshell.server.ClientSession
+import com.kgapp.frpshellpro.frp.FrpLogBus
+import com.kgapp.frpshellpro.server.ClientSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

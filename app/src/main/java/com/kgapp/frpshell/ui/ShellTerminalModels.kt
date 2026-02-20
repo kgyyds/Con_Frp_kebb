@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 /**
  * Shell 终端展示模型：每条命令与其输出形成一个独立命令组。

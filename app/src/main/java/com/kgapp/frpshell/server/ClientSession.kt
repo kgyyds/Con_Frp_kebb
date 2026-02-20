@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.server
+package com.kgapp.frpshellpro.server
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope

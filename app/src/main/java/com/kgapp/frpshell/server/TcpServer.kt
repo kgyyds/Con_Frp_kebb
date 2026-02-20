@@ -1,6 +1,6 @@
-package com.kgapp.frpshell.server
+package com.kgapp.frpshellpro.server
 
-import com.kgapp.frpshell.frp.FrpLogBus
+import com.kgapp.frpshellpro.frp.FrpLogBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

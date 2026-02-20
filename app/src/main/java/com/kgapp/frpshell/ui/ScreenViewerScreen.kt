@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background

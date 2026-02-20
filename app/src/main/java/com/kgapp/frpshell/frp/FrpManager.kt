@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.frp
+package com.kgapp.frpshellpro.frp
 
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope

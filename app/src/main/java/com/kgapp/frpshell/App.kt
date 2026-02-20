@@ -1,4 +1,4 @@
-package com.kgapp.frpshell
+package com.kgapp.frpshellpro
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -7,8 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import com.kgapp.frpshell.frp.FrpLogBus
-import com.kgapp.frpshell.ui.MainScaffold
+import com.kgapp.frpshellpro.frp.FrpLogBus
+import com.kgapp.frpshellpro.ui.MainScaffold
 
 @Composable
 fun App() {

@@ -1,7 +1,7 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import android.util.Log
-import com.kgapp.frpshell.server.ClientSession
+import com.kgapp.frpshellpro.server.ClientSession
 import java.io.File
 
 class ProcessRepository(

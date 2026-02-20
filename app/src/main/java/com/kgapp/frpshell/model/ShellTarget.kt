@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.model
+package com.kgapp.frpshellpro.model
 
 sealed class ShellTarget(val id: String) {
     data object FrpLog : ShellTarget("FRP_LOG")

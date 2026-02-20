@@ -1,7 +1,7 @@
-package com.kgapp.frpshell.core
+package com.kgapp.frpshellpro.core
 
-import com.kgapp.frpshell.frp.FrpLogBus
-import com.kgapp.frpshell.server.TcpServer
+import com.kgapp.frpshellpro.frp.FrpLogBus
+import com.kgapp.frpshellpro.server.TcpServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -58,7 +58,7 @@ class NetworkThread {
         commandChannel.trySend(command)
     }
 
-    fun currentSession(clientId: String): com.kgapp.frpshell.server.ClientSession? = TcpServer.getClient(clientId)
+    fun currentSession(clientId: String): com.kgapp.frpshellpro.server.ClientSession? = TcpServer.getClient(clientId)
 
     private suspend fun handleCommand(command: NetCommand) {
         when (command) {
@@ -81,7 +81,7 @@ class NetworkThread {
             is NetCommand.DownloadFile -> {
                 val result = TcpServer.getClient(command.clientId)
                     ?.downloadFile(command.remotePath, command.targetFile, command.progress)
-                    ?: com.kgapp.frpshell.server.ClientSession.DownloadResult.Failed
+                    ?: com.kgapp.frpshellpro.server.ClientSession.DownloadResult.Failed
                 command.result.complete(result)
             }
         }
@@ -101,11 +101,11 @@ class NetworkThread {
                 runCatching {
                     session.shellEvents.collect { shellEvent ->
                         when (shellEvent) {
-                            is com.kgapp.frpshell.server.ClientSession.ShellEvent.OutputLine -> {
+                            is com.kgapp.frpshellpro.server.ClientSession.ShellEvent.OutputLine -> {
                                 _events.emit(NetEvent.ShellOutputLine(id, shellEvent.line))
                             }
 
-                            com.kgapp.frpshell.server.ClientSession.ShellEvent.CommandEnd -> {
+                            com.kgapp.frpshellpro.server.ClientSession.ShellEvent.CommandEnd -> {
                                 _events.emit(NetEvent.ShellCommandEnded(id))
                             }
                         }

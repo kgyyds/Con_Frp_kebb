@@ -1,7 +1,7 @@
-package com.kgapp.frpshell.core
+package com.kgapp.frpshellpro.core
 
 import android.content.Context
-import com.kgapp.frpshell.frp.FrpManager
+import com.kgapp.frpshellpro.frp.FrpManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +27,7 @@ class FrpManagerThread(context: Context) {
             runCatching {
                 manager.running.collect { _events.emit(FrpEvent.RunningChanged(it)) }
             }.onFailure {
-                com.kgapp.frpshell.frp.FrpLogBus.append("[FrpManager] 状态流订阅异常：${it.message ?: "未知错误"}")
+                com.kgapp.frpshellpro.frp.FrpLogBus.append("[FrpManager] 状态流订阅异常：${it.message ?: "未知错误"}")
             }
         }
         scope.launch {
@@ -40,11 +40,11 @@ class FrpManagerThread(context: Context) {
                             is FrpCommand.Restart -> manager.restart(command.useSu)
                         }
                     }.onFailure {
-                        com.kgapp.frpshell.frp.FrpLogBus.append("[FrpManager] 命令处理异常：${it.message ?: "未知错误"}")
+                        com.kgapp.frpshellpro.frp.FrpLogBus.append("[FrpManager] 命令处理异常：${it.message ?: "未知错误"}")
                     }
                 }
             }.onFailure {
-                com.kgapp.frpshell.frp.FrpLogBus.append("[FrpManager] 命令循环异常：${it.message ?: "未知错误"}")
+                com.kgapp.frpshellpro.frp.FrpLogBus.append("[FrpManager] 命令循环异常：${it.message ?: "未知错误"}")
             }
         }
     }

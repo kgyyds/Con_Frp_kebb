@@ -1,7 +1,7 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import android.content.Context
-import com.kgapp.frpshell.ui.theme.ThemeMode
+import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

@@ -1,6 +1,6 @@
-package com.kgapp.frpshell.core
+package com.kgapp.frpshellpro.core
 
-import com.kgapp.frpshell.server.ClientSession
+import com.kgapp.frpshellpro.server.ClientSession
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 

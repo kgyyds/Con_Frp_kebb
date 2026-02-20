@@ -391,8 +391,16 @@ class ClientSession(
                 val json = items.optJSONObject(index) ?: continue
                 val path = json.optString("path")
                 if (path.isBlank()) continue
-                if (!json.has("file")) continue
-                add(RemoteFileEntry(path = path, file = json.optBoolean("file", true)))
+
+                val type = json.optString("type").lowercase()
+                val file = when {
+                    type == "file" -> true
+                    type == "path" -> false
+                    json.has("file") -> json.optBoolean("file", true)
+                    else -> continue
+                }
+
+                add(RemoteFileEntry(path = path, file = file))
             }
         }
     }

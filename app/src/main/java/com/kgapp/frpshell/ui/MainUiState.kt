@@ -32,6 +32,7 @@ data class MainUiState(
     val fileManagerClientId: String? = null,
     val fileManagerPath: String = "/",
     val fileManagerFiles: List<RemoteFileItem> = emptyList(),
+    val fileManagerErrorMessage: String? = null,
     val fileEditorVisible: Boolean = false,
     val fileEditorRemotePath: String = "",
     val fileEditorCachePath: String = "",

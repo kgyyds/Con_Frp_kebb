@@ -1,6 +1,5 @@
 package com.kgapp.frpshellpro.server
 
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -15,6 +14,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -152,6 +152,33 @@ class ClientSession(
         }
     }
 
+    suspend fun listFiles(path: String): ListFilesResult {
+        val safePath = sanitizeRemotePath(path) ?: return ListFilesResult.Failed("invalid path")
+
+        return ioMutex.withLock {
+            withSocketTimeout(DEFAULT_MANAGED_TIMEOUT_MS) {
+                sendJson(
+                    JSONObject()
+                        .put("type", "file")
+                        .put("path", safePath)
+                )
+
+                val response = readJsonFrame() ?: return@withSocketTimeout ListFilesResult.Failed("invalid response")
+                if (response.optString("type") != "file") {
+                    return@withSocketTimeout ListFilesResult.Failed("invalid response")
+                }
+
+                val error = response.optString("error")
+                if (error.isNotBlank()) {
+                    return@withSocketTimeout ListFilesResult.Error(error)
+                }
+
+                val items = parseFileItems(response.optJSONArray("items"))
+                ListFilesResult.Success(items)
+            } ?: ListFilesResult.Failed("command timeout")
+        }
+    }
+
     fun close() {
         if (!closed.compareAndSet(false, true)) return
         runCatching { socket.close() }
@@ -261,6 +288,19 @@ class ClientSession(
         _output.value += "$line\n"
     }
 
+    private fun parseFileItems(items: JSONArray?): List<RemoteFileEntry> {
+        if (items == null) return emptyList()
+        return buildList {
+            for (index in 0 until items.length()) {
+                val json = items.optJSONObject(index) ?: continue
+                val path = json.optString("path")
+                if (path.isBlank()) continue
+                if (!json.has("file")) continue
+                add(RemoteFileEntry(path = path, file = json.optBoolean("file", true)))
+            }
+        }
+    }
+
     private fun sanitizeRemotePath(path: String): String? {
         if (path.isBlank() || !path.startsWith('/')) return null
         if (path.length > MAX_REMOTE_PATH) return null
@@ -291,6 +331,17 @@ class ClientSession(
         NotFound,
         Failed
     }
+
+    sealed interface ListFilesResult {
+        data class Success(val items: List<RemoteFileEntry>) : ListFilesResult
+        data class Error(val message: String) : ListFilesResult
+        data class Failed(val message: String) : ListFilesResult
+    }
+
+    data class RemoteFileEntry(
+        val path: String,
+        val file: Boolean
+    )
 
     companion object {
         private const val TYPE_JSON = 0x01

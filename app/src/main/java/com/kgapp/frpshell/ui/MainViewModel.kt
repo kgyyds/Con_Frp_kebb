@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import java.security.MessageDigest
+import org.json.JSONArray
 import org.json.JSONObject
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -631,63 +632,146 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun buildDeviceInfoCards(json: JSONObject): List<DeviceInfoCard> {
-        fun JSONObject.stringValue(key: String): String? {
-            if (!has(key)) return null
-            val value = opt(key) ?: return null
-            return when (value) {
-                is Number -> value.toString()
-                is Boolean -> if (value) "是" else "否"
-                else -> value.toString()
-            }.takeIf { it.isNotBlank() && it != "null" }
-        }
-
-        fun firstValue(vararg keys: String): String? = keys.firstNotNullOfOrNull { json.stringValue(it) }
-
         val cards = mutableListOf<DeviceInfoCard>()
 
-        val basicMetrics = listOfNotNull(
-            firstValue("model", "device_model", "deviceName", "device_name")?.let { DeviceInfoMetric("设备型号", it) },
-            firstValue("brand", "manufacturer")?.let { DeviceInfoMetric("厂商", it) },
-            firstValue("serial", "serialNo", "serial_no", "android_id")?.let { DeviceInfoMetric("序列号", it) },
-            firstValue("android", "androidVersion", "android_version", "release")?.let { DeviceInfoMetric("Android", it) },
-            firstValue("sdk", "sdkInt", "sdk_int")?.let { DeviceInfoMetric("SDK", it) }
-        )
-        if (basicMetrics.isNotEmpty()) {
-            cards += DeviceInfoCard("设备概览", "DeviceHub", DeviceInfoAccentType.Primary, basicMetrics)
+        val mem = json.optJSONObject("mem")
+        if (mem != null) {
+            val total = mem.optString("total")
+            val used = mem.optString("used")
+            val free = mem.optString("free")
+            val memProgress = parseStorageRatio(used, total)
+
+            val memoryMetrics = listOfNotNull(
+                total.takeIf { it.isNotBlank() }?.let { DeviceInfoMetric("总内存", it) },
+                used.takeIf { it.isNotBlank() }?.let { DeviceInfoMetric("已用内存", it, memProgress) },
+                free.takeIf { it.isNotBlank() }?.let { DeviceInfoMetric("可用内存", it) }
+            )
+            if (memoryMetrics.isNotEmpty()) {
+                cards += DeviceInfoCard(
+                    title = "内存状态",
+                    iconName = "Memory",
+                    accentType = DeviceInfoAccentType.Primary,
+                    metrics = memoryMetrics
+                )
+            }
         }
 
-        val cpuMetrics = listOfNotNull(
-            firstValue("cpu_usage", "cpuUsage", "cpuPercent")?.let { DeviceInfoMetric("CPU 使用率", it) },
-            firstValue("cpu_temp", "cpuTemp", "temperature")?.let { DeviceInfoMetric("CPU 温度", it) },
-            firstValue("cpu_cores", "cpuCores", "cores")?.let { DeviceInfoMetric("CPU 核心", it) },
-            firstValue("abi", "arch")?.let { DeviceInfoMetric("架构", it) }
-        )
-        if (cpuMetrics.isNotEmpty()) {
-            cards += DeviceInfoCard("CPU 状态", "Memory", DeviceInfoAccentType.Secondary, cpuMetrics)
+        val cpuArray = json.optJSONArray("cpu")
+        if (cpuArray != null && cpuArray.length() > 0) {
+            val maxFreq = findCpuMaxFreq(cpuArray)
+            val cpuMetrics = buildList {
+                for (index in 0 until cpuArray.length()) {
+                    val core = cpuArray.optJSONObject(index) ?: continue
+                    val coreId = core.optInt("core_id", index)
+                    val freqHz = core.optLong("freq_hz", -1L)
+                    val valueText = if (freqHz >= 0L) formatFreq(freqHz) else "未知"
+                    val progress = if (freqHz > 0L && maxFreq > 0L) (freqHz.toFloat() / maxFreq.toFloat()).coerceIn(0f, 1f) else null
+                    add(DeviceInfoMetric(label = "核心 #$coreId", value = valueText, progress = progress))
+                }
+            }
+
+            if (cpuMetrics.isNotEmpty()) {
+                cards += DeviceInfoCard(
+                    title = "CPU 频率",
+                    iconName = "Memory",
+                    accentType = DeviceInfoAccentType.Secondary,
+                    metrics = cpuMetrics
+                )
+            }
         }
 
-        val memoryMetrics = listOfNotNull(
-            firstValue("memory_usage", "memoryUsage", "mem_usage")?.let { DeviceInfoMetric("内存使用率", it) },
-            firstValue("memory_total", "memoryTotal", "mem_total")?.let { DeviceInfoMetric("总内存", it) },
-            firstValue("memory_free", "memoryFree", "mem_free")?.let { DeviceInfoMetric("可用内存", it) },
-            firstValue("storage_total", "storageTotal", "disk_total")?.let { DeviceInfoMetric("存储总量", it) },
-            firstValue("storage_free", "storageFree", "disk_free")?.let { DeviceInfoMetric("剩余存储", it) }
-        )
-        if (memoryMetrics.isNotEmpty()) {
-            cards += DeviceInfoCard("内存与存储", "Storage", DeviceInfoAccentType.Tertiary, memoryMetrics)
+        val diskArray = json.optJSONArray("disk")
+        if (diskArray != null && diskArray.length() > 0) {
+            cards += buildDiskCards(diskArray)
         }
 
         if (cards.isEmpty()) {
             val fallback = json.keys().asSequence().take(8).mapNotNull { key ->
-                val value = json.stringValue(key) ?: return@mapNotNull null
+                if (key == "type") return@mapNotNull null
+                val value = json.opt(key)?.toString()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 DeviceInfoMetric(key, value)
             }.toList()
             if (fallback.isNotEmpty()) {
-                cards += DeviceInfoCard("信息明细", "Info", DeviceInfoAccentType.Primary, fallback)
+                cards += DeviceInfoCard("信息明细", "Info", DeviceInfoAccentType.Tertiary, fallback)
             }
         }
 
         return cards
+    }
+
+    private fun buildDiskCards(diskArray: JSONArray): List<DeviceInfoCard> {
+        return buildList {
+            for (index in 0 until diskArray.length()) {
+                val disk = diskArray.optJSONObject(index) ?: continue
+                val mount = disk.optString("mount").ifBlank { "挂载点 #$index" }
+                val size = disk.optString("size")
+                val used = disk.optString("used")
+                val avail = disk.optString("avail")
+                val usePercentText = disk.optString("use_percent")
+                val usePercent = usePercentText.removeSuffix("%").toFloatOrNull()?.div(100f)?.coerceIn(0f, 1f)
+
+                val metrics = listOfNotNull(
+                    size.takeIf { it.isNotBlank() }?.let { DeviceInfoMetric("分区大小", it) },
+                    used.takeIf { it.isNotBlank() }?.let { DeviceInfoMetric("已使用", it, usePercent) },
+                    avail.takeIf { it.isNotBlank() }?.let { DeviceInfoMetric("可用空间", it) },
+                    usePercentText.takeIf { it.isNotBlank() }?.let { DeviceInfoMetric("占用比例", it, usePercent) }
+                )
+
+                if (metrics.isNotEmpty()) {
+                    add(
+                        DeviceInfoCard(
+                            title = "磁盘 $mount",
+                            iconName = "Storage",
+                            accentType = DeviceInfoAccentType.Tertiary,
+                            metrics = metrics
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private fun findCpuMaxFreq(cpuArray: JSONArray): Long {
+        var max = 0L
+        for (index in 0 until cpuArray.length()) {
+            val freq = cpuArray.optJSONObject(index)?.optLong("freq_hz", 0L) ?: 0L
+            if (freq > max) max = freq
+        }
+        return max
+    }
+
+    private fun formatFreq(freqHz: Long): String {
+        return when {
+            freqHz >= 1_000_000_000L -> String.format("%.2f GHz", freqHz / 1_000_000_000f)
+            freqHz >= 1_000_000L -> String.format("%.0f MHz", freqHz / 1_000_000f)
+            freqHz >= 1_000L -> String.format("%.0f KHz", freqHz / 1_000f)
+            else -> "$freqHz Hz"
+        }
+    }
+
+    private fun parseStorageRatio(usedText: String, totalText: String): Float? {
+        val used = parseSizeToBytes(usedText) ?: return null
+        val total = parseSizeToBytes(totalText) ?: return null
+        if (total <= 0.0) return null
+        return (used / total).toFloat().coerceIn(0f, 1f)
+    }
+
+    private fun parseSizeToBytes(raw: String): Double? {
+        val trimmed = raw.trim().uppercase()
+        if (trimmed.isBlank()) return null
+        val match = Regex("([0-9]+(?:\\.[0-9]+)?)\\s*([KMGTP]?I?B?|B)").find(trimmed) ?: return null
+        val value = match.groupValues[1].toDoubleOrNull() ?: return null
+        val unit = match.groupValues[2]
+        val multiplier = when (unit) {
+            "B" -> 1.0
+            "K", "KB", "KIB" -> 1024.0
+            "M", "MB", "MIB" -> 1024.0 * 1024.0
+            "G", "GB", "GIB" -> 1024.0 * 1024.0 * 1024.0
+            "T", "TB", "TIB" -> 1024.0 * 1024.0 * 1024.0 * 1024.0
+            "P", "PB", "PIB" -> 1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0
+            else -> return null
+        }
+        return value * multiplier
     }
 
     private fun sortProcessItems(

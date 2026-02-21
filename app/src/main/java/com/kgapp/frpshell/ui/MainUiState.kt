@@ -89,7 +89,8 @@ data class DeviceInfoCard(
 
 data class DeviceInfoMetric(
     val label: String,
-    val value: String
+    val value: String,
+    val progress: Float? = null
 )
 
 enum class DeviceInfoAccentType {

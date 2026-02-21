@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.filled.DeviceHub
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -109,13 +111,20 @@ private fun DeviceInfoCardItem(card: DeviceInfoCard) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(metric.label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = null,
+                            tint = tint.copy(alpha = 0.85f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(metric.label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     Text(metric.value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                 }
 
-                val percent = parsePercent(metric.value)
-                if (percent != null) {
-                    SimpleBarChart(progress = percent / 100f, color = tint)
+                metric.progress?.let {
+                    SimpleBarChart(progress = it, color = tint)
                 }
             }
         }
@@ -150,10 +159,4 @@ private fun resolveIcon(name: String): ImageVector = when (name) {
     "Memory" -> Icons.Default.Memory
     "Storage" -> Icons.Default.Storage
     else -> Icons.Default.Info
-}
-
-private fun parsePercent(text: String): Float? {
-    val raw = """([0-9]+(?:\\.[0-9]+)?)%""".toRegex().find(text)?.groupValues?.getOrNull(1)
-        ?: return null
-    return raw.toFloatOrNull()?.coerceIn(0f, 100f)
 }

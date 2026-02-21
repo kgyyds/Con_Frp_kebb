@@ -150,14 +150,14 @@ fun SettingsScreen(
             label = { Text("upload.sh") }
         )
 
-        HackerButtonRow {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HackerButton(
                 text = "保存 upload.sh",
                 onClick = onSaveUploadScript
             )
         }
 
-        HackerButtonRow {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             HackerButton(
                 text = "仅保存",
                 onClick = onSave

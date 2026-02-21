@@ -31,7 +31,6 @@ private val DarkColors = darkColorScheme()
 
 @Composable
 fun FrpShellTheme(
-    themeMode: ThemeMode = ThemeMode.DARK,
     content: @Composable () -> Unit
 ) {
     // 强制使用黑客风格主题

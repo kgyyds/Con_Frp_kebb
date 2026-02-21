@@ -118,7 +118,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
         }.getOrNull()
     }
 
-    FrpShellTheme(themeMode = uiState.themeMode) {
+    FrpShellTheme {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
         val context = LocalContext.current

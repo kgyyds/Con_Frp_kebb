@@ -64,6 +64,8 @@ data class MainUiState(
     val screenCaptureLog: String = "",
     val screenCaptureCancelable: Boolean = false,
     val cameraSelectorVisible: Boolean = false,
+    val deviceInfoJson: String? = null,
+    val deviceInfoClientId: String? = null,
     val clientModels: Map<String, ClientDisplayInfo> = emptyMap(),
     val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap()
 )

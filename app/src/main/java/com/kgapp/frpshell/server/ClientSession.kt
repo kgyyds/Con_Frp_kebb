@@ -412,6 +412,23 @@ class ClientSession(
         return path
     }
 
+    suspend fun requestDeviceInfo(timeoutMs: Long = 5000L): JSONObject? {
+        return ioMutex.withLock {
+            withSocketTimeout(timeoutMs) {
+                sendJson(JSONObject().put("type", "info"))
+                val response = readJsonFrame()
+                if (response == null || response.optString("type") != "info") {
+                    return@withSocketTimeout JSONObject().apply {
+                        put("type", "info")
+                        put("error", "Invalid response from client")
+                    }
+                }
+                response
+            }
+        }
+    }
+
+
     data class RegistrationInfo(
         val deviceName: String,
         val deviceId: String,

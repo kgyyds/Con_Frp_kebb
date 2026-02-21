@@ -62,6 +62,8 @@ import androidx.compose.material.icons.filled.Videocam
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -197,6 +199,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                     onStopRecord = vm::stopRecord,
                                     onOpenFileManager = vm::openFileManager,
                                     onOpenRunningPrograms = vm::openRunningPrograms,
+                                    onShowDeviceInfo = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showDeviceInfo) },
                                     onRefreshProcessList = vm::refreshRunningPrograms,
                                     processListVisible = uiState.processListVisible
                                 )
@@ -416,15 +419,33 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                     onClick = { vm.takePhoto(id) },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text("Camera ID: $id")
+                                    Text("摄像头 $id")
                                 }
                             }
                         }
                     },
-                    confirmButton = {},
-                    dismissButton = {
-                        TextButton(onClick = vm::closeCameraSelector) {
-                            Text("取消")
+                    confirmButton = { TextButton(onClick = vm::closeCameraSelector) { Text("取消") } }
+                )
+            }
+
+            if (uiState.deviceInfoJson != null) {
+                AlertDialog(
+                    onDismissRequest = vm::dismissDeviceInfo,
+                    title = { Text("设备信息 - ${uiState.deviceInfoClientId}") },
+                    text = {
+                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                            item {
+                                Text(
+                                    text = uiState.deviceInfoJson.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = vm::dismissDeviceInfo) {
+                            Text("关闭")
                         }
                     }
                 )
@@ -443,6 +464,7 @@ private fun TopBarMenus(
     onStopRecord: () -> Unit,
     onOpenFileManager: () -> Unit,
     onOpenRunningPrograms: () -> Unit,
+    onShowDeviceInfo: () -> Unit,
     onRefreshProcessList: () -> Unit,
     processListVisible: Boolean
 ) {
@@ -464,6 +486,13 @@ private fun TopBarMenus(
                 onClick = {
                     performanceMenuExpanded = false
                     onOpenRunningPrograms()
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("设备信息") },
+                onClick = {
+                    performanceMenuExpanded = false
+                    onShowDeviceInfo()
                 }
             )
         }

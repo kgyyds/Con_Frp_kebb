@@ -468,6 +468,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         shellSendChannel.trySend(ShellSendRequest(target.id, command))
     }
 
+    fun showDeviceInfo(clientId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = networkThread.currentSession(clientId)
+            if (session == null) {
+                _uiState.update {
+                    it.copy(
+                        deviceInfoClientId = clientId,
+                        deviceInfoJson = "{\n  \"type\": \"info\",\n  \"error\": \"Client not connected\"\n}"
+                    )
+                }
+                return@launch
+            }
+
+            val deviceInfo = session.requestDeviceInfo()
+            val jsonText = deviceInfo?.toString(2) ?: "{\n  \"type\": \"info\",\n  \"error\": \"Failed to get device info\"\n}"
+
+            _uiState.update {
+                it.copy(
+                    deviceInfoClientId = clientId,
+                    deviceInfoJson = jsonText
+                )
+            }
+        }
+    }
+
+    fun dismissDeviceInfo() {
+        _uiState.update {
+            it.copy(
+                deviceInfoClientId = null,
+                deviceInfoJson = null
+            )
+        }
+    }
+
+
     fun sendCommand(command: String) {
         val text = command.trim()
         if (text.isBlank()) return

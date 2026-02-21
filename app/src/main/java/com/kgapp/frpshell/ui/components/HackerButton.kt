@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -38,13 +37,14 @@ fun HackerButton(
         colors = ButtonDefaults.buttonColors(
             containerColor = MaterialTheme.colorScheme.primary, // 使用主题的主色
             contentColor = MaterialTheme.colorScheme.onPrimary, // 使用主题的onPrimary
-            disabledContainerColor = Color(0x004400),
-            disabledContentColor = Color(0x006600)
+            disabledContainerColor = Color(0xFF004400),
+            disabledContentColor = Color(0xFF66AA66)
         ),
         shape = RoundedCornerShape(8.dp) // 8dp圆角，保持方形但有美感
     ) {
         Text(
             text = text,
+            color = MaterialTheme.colorScheme.onPrimary,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
             )
@@ -71,12 +71,13 @@ fun HackerOutlinedButton(
         border = BorderStroke(2.dp, MaterialTheme.colorScheme.outline), // 使用主题的outline色
         colors = ButtonDefaults.outlinedButtonColors(
             contentColor = MaterialTheme.colorScheme.onSurface, // 使用主题的onSurface
-            disabledContentColor = Color(0x004400)
+            disabledContentColor = Color(0xFF66AA66)
         ),
         shape = RoundedCornerShape(8.dp) // 8dp圆角，保持方形但有美感
     ) {
         Text(
             text = text,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
             )
@@ -103,8 +104,8 @@ fun HackerIconButton(
         colors = ButtonDefaults.buttonColors(
             containerColor = MaterialTheme.colorScheme.primary, // 使用主题的主色
             contentColor = MaterialTheme.colorScheme.onPrimary, // 使用主题的onPrimary
-            disabledContainerColor = Color(0x004400),
-            disabledContentColor = Color(0x006600)
+            disabledContainerColor = Color(0xFF004400),
+            disabledContentColor = Color(0xFF66AA66)
         ),
         shape = RoundedCornerShape(8.dp) // 8dp圆角，保持方形但有美感
     ) {

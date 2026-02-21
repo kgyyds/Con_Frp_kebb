@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.unit.dp
+import com.kgapp.frpshellpro.ui.components.HackerIconButton
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -211,8 +212,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             configContent = uiState.configContent,
                             useSu = uiState.useSu,
                             suAvailable = uiState.suAvailable,
-                            themeMode = uiState.themeMode,
-                            shellFontSizeSp = uiState.shellFontSizeSp,
+                              shellFontSizeSp = uiState.shellFontSizeSp,
                             uploadScriptContent = uiState.uploadScriptContent,
                             recordStreamHost = uiState.recordStreamHost,
                             recordStreamPort = uiState.recordStreamPort,
@@ -221,8 +221,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             firstLaunchFlow = uiState.firstLaunchFlow,
                             onConfigChanged = vm::onConfigChanged,
                             onUseSuChanged = vm::onUseSuChanged,
-                            onThemeModeChanged = vm::onThemeModeChanged,
-                            onShellFontSizeChanged = vm::onShellFontSizeChanged,
+                              onShellFontSizeChanged = vm::onShellFontSizeChanged,
                             onUploadScriptContentChanged = vm::onUploadScriptContentChanged,
                             onRecordStreamHostChanged = vm::onRecordStreamHostChanged,
                             onRecordStreamPortChanged = vm::onRecordStreamPortChanged,
@@ -533,7 +532,7 @@ private fun TopBarMenus(
         }
     }
 
-    IconButton(onClick = onOpenSettings) {
+    HackerIconButton(onClick = onOpenSettings) {
         Icon(Icons.Default.Settings, contentDescription = "settings")
     }
 }

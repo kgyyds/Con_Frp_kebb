@@ -5,7 +5,6 @@ import com.kgapp.frpshellpro.ui.state.CaptureUiState
 import com.kgapp.frpshellpro.ui.state.FileManagerUiState
 import com.kgapp.frpshellpro.ui.state.FrpUiState
 import com.kgapp.frpshellpro.ui.state.ShellUiState
-import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
 enum class ScreenDestination {
     Main,
@@ -20,8 +19,7 @@ data class MainUiState(
     val firstLaunchFlow: Boolean = false,
     val suAvailable: Boolean = false,
     val useSu: Boolean = false,
-    val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val localPort: Int = 23231,
+      val localPort: Int = 23231,
     val shellFontSizeSp: Float = SettingsStore.DEFAULT_FONT_SIZE_SP,
     val uploadScriptContent: String = "",
     val recordStreamHost: String = SettingsStore.DEFAULT_RECORD_STREAM_HOST,

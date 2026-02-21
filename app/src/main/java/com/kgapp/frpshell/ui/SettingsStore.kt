@@ -1,7 +1,6 @@
 package com.kgapp.frpshellpro.ui
 
 import android.content.Context
-import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -18,15 +17,7 @@ class SettingsStore(context: Context) {
         prefs.edit().putBoolean(KEY_USE_SU, value).apply()
     }
 
-    fun getThemeMode(): ThemeMode {
-        val raw = prefs.getString(KEY_THEME_MODE, ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name
-        return ThemeMode.entries.firstOrNull { it.name == raw } ?: ThemeMode.SYSTEM
-    }
-
-    fun setThemeMode(mode: ThemeMode) {
-        prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
-    }
-
+  
     fun getShellFontSizeSp(): Float = prefs.getFloat(KEY_SHELL_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
 
     fun setShellFontSizeSp(value: Float) {
@@ -67,8 +58,7 @@ class SettingsStore(context: Context) {
         private const val PREFS_NAME = "frp_shell_settings"
         private const val KEY_INITIALIZED = "initialized"
         private const val KEY_USE_SU = "use_su"
-        private const val KEY_THEME_MODE = "theme_mode"
-        private const val KEY_SHELL_FONT_SIZE_SP = "shell_font_size_sp"
+              private const val KEY_SHELL_FONT_SIZE_SP = "shell_font_size_sp"
         private const val KEY_UPLOAD_SCRIPT_CONTENT = "upload_script_content"
         private const val KEY_RECORD_STREAM_HOST = "record_stream_host"
         private const val KEY_RECORD_STREAM_PORT = "record_stream_port"

@@ -1,5 +1,7 @@
 package com.kgapp.frpshellpro.ui
 
+import com.kgapp.frpshellpro.ui.components.HackerButton
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,24 +11,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
 @Composable
 fun SettingsScreen(
     configContent: String,
     useSu: Boolean,
     suAvailable: Boolean,
-    themeMode: ThemeMode,
     shellFontSizeSp: Float,
     uploadScriptContent: String,
     recordStreamHost: String,
@@ -36,8 +34,7 @@ fun SettingsScreen(
     firstLaunchFlow: Boolean,
     onConfigChanged: (String) -> Unit,
     onUseSuChanged: (Boolean) -> Unit,
-    onThemeModeChanged: (ThemeMode) -> Unit,
-    onShellFontSizeChanged: (Float) -> Unit,
+      onShellFontSizeChanged: (Float) -> Unit,
     onUploadScriptContentChanged: (String) -> Unit,
     onRecordStreamHostChanged: (String) -> Unit,
     onRecordStreamPortChanged: (String) -> Unit,
@@ -85,26 +82,7 @@ fun SettingsScreen(
             )
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("主题", style = MaterialTheme.typography.titleSmall)
-            ThemeMode.entries.forEach { mode ->
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    RadioButton(
-                        selected = themeMode == mode,
-                        onClick = { onThemeModeChanged(mode) }
-                    )
-                    Text(
-                        text = when (mode) {
-                            ThemeMode.SYSTEM -> "跟随系统"
-                            ThemeMode.LIGHT -> "浅色"
-                            ThemeMode.DARK -> "深色"
-                        },
-                        modifier = Modifier.padding(top = 12.dp)
-                    )
-                }
-            }
-        }
-
+  
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("终端字体大小：${shellFontSizeSp.toInt()}sp", style = MaterialTheme.typography.titleSmall)
             Slider(
@@ -172,19 +150,22 @@ fun SettingsScreen(
             label = { Text("upload.sh") }
         )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onSaveUploadScript) {
-                Text("保存 upload.sh")
-            }
+        HackerButtonRow {
+            HackerButton(
+                text = "保存 upload.sh",
+                onClick = onSaveUploadScript
+            )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onSave) {
-                Text("仅保存")
-            }
-            Button(onClick = onSaveAndRestart) {
-                Text(if (firstLaunchFlow) "保存并启动" else "保存并重启")
-            }
+        HackerButtonRow {
+            HackerButton(
+                text = "仅保存",
+                onClick = onSave
+            )
+            HackerButton(
+                text = if (firstLaunchFlow) "保存并启动" else "保存并重启",
+                onClick = onSaveAndRestart
+            )
         }
     }
 }

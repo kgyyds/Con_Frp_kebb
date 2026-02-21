@@ -21,7 +21,6 @@ import com.kgapp.frpshellpro.frp.FrpLogBus
 import com.kgapp.frpshellpro.frp.FrpManager
 import com.kgapp.frpshellpro.model.ShellTarget
 import com.kgapp.frpshellpro.server.ClientSession
-import com.kgapp.frpshellpro.ui.theme.ThemeMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -195,8 +194,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val initialized = settingsStore.isInitialized()
                 val suAvailable = FrpManager.detectSuAvailable()
                 val useSuDefault = if (initialized) settingsStore.getUseSu() else suAvailable
-                val themeMode = settingsStore.getThemeMode()
-                val shellFontSizeSp = settingsStore.getShellFontSizeSp().coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
+                  val shellFontSizeSp = settingsStore.getShellFontSizeSp().coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
                 val uploadScriptContent = loadUploadScriptContent()
                 val recordStreamHost = settingsStore.getRecordStreamHost()
                 val recordStreamPort = settingsStore.getRecordStreamPort()
@@ -205,8 +203,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 if (!initialized) {
                     settingsStore.setUseSu(useSuDefault)
-                    settingsStore.setThemeMode(ThemeMode.SYSTEM)
-                    settingsStore.setShellFontSizeSp(SettingsStore.DEFAULT_FONT_SIZE_SP)
+                      settingsStore.setShellFontSizeSp(SettingsStore.DEFAULT_FONT_SIZE_SP)
                     settingsStore.setRecordStreamHost(SettingsStore.DEFAULT_RECORD_STREAM_HOST)
                     settingsStore.setRecordStreamPort(SettingsStore.DEFAULT_RECORD_STREAM_PORT.toString())
                     settingsStore.setRecordStartTemplate(SettingsStore.DEFAULT_RECORD_START_TEMPLATE)
@@ -225,8 +222,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         configContent = content,
                         suAvailable = suAvailable,
                         useSu = useSuDefault,
-                        themeMode = themeMode,
-                        localPort = localPort,
+                          localPort = localPort,
                         shellFontSizeSp = shellFontSizeSp,
                         uploadScriptContent = uploadScriptContent,
                         recordStreamHost = recordStreamHost,
@@ -296,10 +292,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(useSu = enabled) }
     }
 
-    fun onThemeModeChanged(mode: ThemeMode) {
-        _uiState.update { it.copy(themeMode = mode) }
-    }
-
+  
     fun onShellFontSizeChanged(sizeSp: Float) {
         val adjusted = sizeSp.coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
         settingsStore.setShellFontSizeSp(adjusted)
@@ -363,8 +356,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         frpManager.saveConfig(state.configContent)
         settingsStore.setUseSu(state.useSu)
-        settingsStore.setThemeMode(state.themeMode)
-        settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
+            settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
         settingsStore.setRecordStreamHost(state.recordStreamHost.trim())
         settingsStore.setRecordStreamPort(state.recordStreamPort.trim())
         settingsStore.setRecordStartTemplate(state.recordStartTemplate)
@@ -376,15 +368,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(firstLaunchFlow = false, screen = ScreenDestination.Main, localPort = localPort, selectedTarget = ShellTarget.FrpLog)
         }
-        FrpLogBus.append("[设置] 保存完成 (useSu=${state.useSu}, theme=${state.themeMode}, localPort=$localPort, font=${state.shellFontSizeSp})")
+        FrpLogBus.append("[设置] 保存完成 (useSu=${state.useSu}, localPort=$localPort, font=${state.shellFontSizeSp})")
     }
 
     fun saveAndRestartFrp() {
         val state = _uiState.value
         frpManager.saveConfig(state.configContent)
         settingsStore.setUseSu(state.useSu)
-        settingsStore.setThemeMode(state.themeMode)
-        settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
+            settingsStore.setShellFontSizeSp(state.shellFontSizeSp)
         settingsStore.setRecordStreamHost(state.recordStreamHost.trim())
         settingsStore.setRecordStreamPort(state.recordStreamPort.trim())
         settingsStore.setRecordStartTemplate(state.recordStartTemplate)

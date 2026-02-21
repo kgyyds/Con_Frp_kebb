@@ -9,7 +9,8 @@ import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
 enum class ScreenDestination {
     Main,
-    Settings
+    Settings,
+    DeviceInfo
 }
 
 data class MainUiState(
@@ -66,6 +67,9 @@ data class MainUiState(
     val cameraSelectorVisible: Boolean = false,
     val deviceInfoJson: String? = null,
     val deviceInfoClientId: String? = null,
+    val deviceInfoLoading: Boolean = false,
+    val deviceInfoErrorMessage: String? = null,
+    val deviceInfoCards: List<DeviceInfoCard> = emptyList(),
     val clientModels: Map<String, ClientDisplayInfo> = emptyMap(),
     val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap()
 )
@@ -74,3 +78,23 @@ data class ClientDisplayInfo(
     val modelName: String,
     val serialNo: String
 )
+
+
+data class DeviceInfoCard(
+    val title: String,
+    val iconName: String,
+    val accentType: DeviceInfoAccentType,
+    val metrics: List<DeviceInfoMetric>
+)
+
+data class DeviceInfoMetric(
+    val label: String,
+    val value: String,
+    val progress: Float? = null
+)
+
+enum class DeviceInfoAccentType {
+    Primary,
+    Secondary,
+    Tertiary
+}

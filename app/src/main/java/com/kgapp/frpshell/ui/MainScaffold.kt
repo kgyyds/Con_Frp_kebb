@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
@@ -62,8 +63,6 @@ import androidx.compose.material.icons.filled.Videocam
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -130,10 +129,11 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
         }
 
         val isSettings = uiState.screen == ScreenDestination.Settings
+        val isDeviceInfo = uiState.screen == ScreenDestination.DeviceInfo
 
         ModalNavigationDrawer(
             drawerState = drawerState,
-            gesturesEnabled = !isSettings,
+            gesturesEnabled = !isSettings && !isDeviceInfo,
             drawerContent = {
                 if (!isSettings) {
                     ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.5f)) {
@@ -161,6 +161,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 else if (uiState.fileManagerVisible) "文件管理"
                                 else if (uiState.processListVisible) "运行的程序"
                                 else if (uiState.screenViewerVisible) "屏幕截图"
+                                else if (isDeviceInfo) "设备信息"
                                 else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
                             )
@@ -170,6 +171,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 onClick = {
                                     when {
                                         isSettings -> vm.navigateBackToMain()
+                                        isDeviceInfo -> vm.dismissDeviceInfo()
                                         uiState.fileEditorVisible -> vm.closeFileEditor()
                                         uiState.fileManagerVisible -> vm.closeFileManager()
                                         uiState.processListVisible -> vm.closePerformance()
@@ -179,8 +181,8 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) "back" else "open drawer"
+                                    if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) "back" else "open drawer"
                                 )
                             }
                         },
@@ -188,6 +190,10 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             if (uiState.fileEditorVisible) {
                                 IconButton(onClick = vm::saveEditor) {
                                     Icon(Icons.Default.Save, contentDescription = "save")
+                                }
+                            } else if (isDeviceInfo) {
+                                IconButton(onClick = vm::refreshDeviceInfo) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "刷新设备信息")
                                 }
                             } else if (!isSettings && !uiState.screenViewerVisible) {
                                 TopBarMenus(
@@ -254,6 +260,17 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             imagePath = uiState.screenViewerImagePath,
                             timestamp = uiState.screenViewerTimestamp,
                             contentPadding = padding
+                        )
+                    }
+
+                    isDeviceInfo -> {
+                        DeviceInfoScreen(
+                            contentPadding = padding,
+                            clientId = uiState.deviceInfoClientId,
+                            loading = uiState.deviceInfoLoading,
+                            errorMessage = uiState.deviceInfoErrorMessage,
+                            cards = uiState.deviceInfoCards,
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
 
@@ -428,28 +445,6 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                 )
             }
 
-            if (uiState.deviceInfoJson != null) {
-                AlertDialog(
-                    onDismissRequest = vm::dismissDeviceInfo,
-                    title = { Text("设备信息 - ${uiState.deviceInfoClientId}") },
-                    text = {
-                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                            item {
-                                Text(
-                                    text = uiState.deviceInfoJson.orEmpty(),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = vm::dismissDeviceInfo) {
-                            Text("关闭")
-                        }
-                    }
-                )
-            }
         }
     }
 }
@@ -488,8 +483,9 @@ private fun TopBarMenus(
                     onOpenRunningPrograms()
                 }
             )
-            DropdownMenuItem(
-                text = { Text("设备信息") },
+            TopMenuItem(
+                text = "设备信息",
+                icon = Icons.Default.Info,
                 onClick = {
                     performanceMenuExpanded = false
                     onShowDeviceInfo()

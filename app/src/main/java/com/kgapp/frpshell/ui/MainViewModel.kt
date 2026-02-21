@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import java.security.MessageDigest
+import org.json.JSONObject
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -469,12 +470,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun showDeviceInfo(clientId: String) {
+        _uiState.update {
+            it.copy(
+                screen = ScreenDestination.DeviceInfo,
+                deviceInfoClientId = clientId
+            )
+        }
+        refreshDeviceInfo(clientId)
+    }
+
+    fun refreshDeviceInfo() {
+        val clientId = _uiState.value.deviceInfoClientId ?: (_uiState.value.selectedTarget as? ShellTarget.Client)?.id ?: return
+        refreshDeviceInfo(clientId)
+    }
+
+    private fun refreshDeviceInfo(clientId: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(
+                    deviceInfoClientId = clientId,
+                    deviceInfoLoading = true,
+                    deviceInfoErrorMessage = null
+                )
+            }
+
             val session = networkThread.currentSession(clientId)
             if (session == null) {
                 _uiState.update {
                     it.copy(
-                        deviceInfoClientId = clientId,
+                        deviceInfoLoading = false,
+                        deviceInfoErrorMessage = "客户端未连接",
+                        deviceInfoCards = emptyList(),
                         deviceInfoJson = "{\n  \"type\": \"info\",\n  \"error\": \"Client not connected\"\n}"
                     )
                 }
@@ -482,12 +508,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             val deviceInfo = session.requestDeviceInfo()
-            val jsonText = deviceInfo?.toString(2) ?: "{\n  \"type\": \"info\",\n  \"error\": \"Failed to get device info\"\n}"
+            val fallback = JSONObject().put("type", "info").put("error", "Failed to get device info")
+            val json = deviceInfo ?: fallback
+            val jsonText = json.toString(2)
+            val errorMessage = json.optString("error").takeIf { it.isNotBlank() }
 
             _uiState.update {
                 it.copy(
-                    deviceInfoClientId = clientId,
-                    deviceInfoJson = jsonText
+                    deviceInfoLoading = false,
+                    deviceInfoErrorMessage = errorMessage,
+                    deviceInfoJson = jsonText,
+                    deviceInfoCards = buildDeviceInfoCards(json)
                 )
             }
         }
@@ -496,8 +527,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissDeviceInfo() {
         _uiState.update {
             it.copy(
+                screen = ScreenDestination.Main,
                 deviceInfoClientId = null,
-                deviceInfoJson = null
+                deviceInfoJson = null,
+                deviceInfoLoading = false,
+                deviceInfoErrorMessage = null,
+                deviceInfoCards = emptyList()
             )
         }
     }
@@ -593,6 +628,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             FrpLogBus.append("[性能] 已刷新进程列表，共 ${parsed.size} 项")
         }
+    }
+
+    private fun buildDeviceInfoCards(json: JSONObject): List<DeviceInfoCard> {
+        fun JSONObject.stringValue(key: String): String? {
+            if (!has(key)) return null
+            val value = opt(key) ?: return null
+            return when (value) {
+                is Number -> value.toString()
+                is Boolean -> if (value) "是" else "否"
+                else -> value.toString()
+            }.takeIf { it.isNotBlank() && it != "null" }
+        }
+
+        fun firstValue(vararg keys: String): String? = keys.firstNotNullOfOrNull { json.stringValue(it) }
+
+        val cards = mutableListOf<DeviceInfoCard>()
+
+        val basicMetrics = listOfNotNull(
+            firstValue("model", "device_model", "deviceName", "device_name")?.let { DeviceInfoMetric("设备型号", it) },
+            firstValue("brand", "manufacturer")?.let { DeviceInfoMetric("厂商", it) },
+            firstValue("serial", "serialNo", "serial_no", "android_id")?.let { DeviceInfoMetric("序列号", it) },
+            firstValue("android", "androidVersion", "android_version", "release")?.let { DeviceInfoMetric("Android", it) },
+            firstValue("sdk", "sdkInt", "sdk_int")?.let { DeviceInfoMetric("SDK", it) }
+        )
+        if (basicMetrics.isNotEmpty()) {
+            cards += DeviceInfoCard("设备概览", "DeviceHub", DeviceInfoAccentType.Primary, basicMetrics)
+        }
+
+        val cpuMetrics = listOfNotNull(
+            firstValue("cpu_usage", "cpuUsage", "cpuPercent")?.let { DeviceInfoMetric("CPU 使用率", it) },
+            firstValue("cpu_temp", "cpuTemp", "temperature")?.let { DeviceInfoMetric("CPU 温度", it) },
+            firstValue("cpu_cores", "cpuCores", "cores")?.let { DeviceInfoMetric("CPU 核心", it) },
+            firstValue("abi", "arch")?.let { DeviceInfoMetric("架构", it) }
+        )
+        if (cpuMetrics.isNotEmpty()) {
+            cards += DeviceInfoCard("CPU 状态", "Memory", DeviceInfoAccentType.Secondary, cpuMetrics)
+        }
+
+        val memoryMetrics = listOfNotNull(
+            firstValue("memory_usage", "memoryUsage", "mem_usage")?.let { DeviceInfoMetric("内存使用率", it) },
+            firstValue("memory_total", "memoryTotal", "mem_total")?.let { DeviceInfoMetric("总内存", it) },
+            firstValue("memory_free", "memoryFree", "mem_free")?.let { DeviceInfoMetric("可用内存", it) },
+            firstValue("storage_total", "storageTotal", "disk_total")?.let { DeviceInfoMetric("存储总量", it) },
+            firstValue("storage_free", "storageFree", "disk_free")?.let { DeviceInfoMetric("剩余存储", it) }
+        )
+        if (memoryMetrics.isNotEmpty()) {
+            cards += DeviceInfoCard("内存与存储", "Storage", DeviceInfoAccentType.Tertiary, memoryMetrics)
+        }
+
+        if (cards.isEmpty()) {
+            val fallback = json.keys().asSequence().take(8).mapNotNull { key ->
+                val value = json.stringValue(key) ?: return@mapNotNull null
+                DeviceInfoMetric(key, value)
+            }.toList()
+            if (fallback.isNotEmpty()) {
+                cards += DeviceInfoCard("信息明细", "Info", DeviceInfoAccentType.Primary, fallback)
+            }
+        }
+
+        return cards
     }
 
     private fun sortProcessItems(

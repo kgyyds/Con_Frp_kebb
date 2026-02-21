@@ -93,7 +93,8 @@ fun HackerIconButton(
     Button(
         onClick = onClick,
         modifier = modifier
-            .size(48.dp),
+            .width(48.dp)
+            .height(48.dp),
         enabled = enabled,
         colors = ButtonDefaults.buttonColors(
             containerColor = Color(0x00ff41), // 亮绿色背景

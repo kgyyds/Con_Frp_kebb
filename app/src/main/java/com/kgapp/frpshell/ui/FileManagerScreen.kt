@@ -17,6 +17,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import com.kgapp.frpshellpro.ui.components.HackerButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -76,15 +77,19 @@ fun FileManagerScreen(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onBackDirectory, enabled = currentPath != "/") {
-                Text("上级目录")
-            }
-            Button(onClick = onRefresh) {
-                Text("刷新")
-            }
-            Button(onClick = onUploadFile) {
-                Text("上传文件")
-            }
+            HackerButton(
+                text = "上级目录",
+                onClick = onBackDirectory,
+                enabled = currentPath != "/"
+            )
+            HackerButton(
+                text = "刷新",
+                onClick = onRefresh
+            )
+            HackerButton(
+                text = "上传文件",
+                onClick = onUploadFile
+            )
         }
 
         if (transferVisible) {

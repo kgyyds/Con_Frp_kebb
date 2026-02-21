@@ -36,16 +36,18 @@ fun HackerButton(
             .fillMaxWidth(),
         enabled = enabled,
         colors = ButtonDefaults.buttonColors(
-            containerColor = Color(0x00ff41), // 亮绿色背景
-            contentColor = Color(0x000000), // 黑色文字
+            containerColor = MaterialTheme.colorScheme.primary, // 使用主题的主色
+            contentColor = MaterialTheme.colorScheme.onPrimary, // 使用主题的onPrimary
             disabledContainerColor = Color(0x004400),
             disabledContentColor = Color(0x006600)
         ),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp) // 4dp圆角，接近方形
+        shape = RoundedCornerShape(8.dp) // 8dp圆角，保持方形但有美感
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.bodyLarge
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+            )
         )
     }
 }
@@ -66,16 +68,18 @@ fun HackerOutlinedButton(
             .height(48.dp)
             .fillMaxWidth(),
         enabled = enabled,
-        border = BorderStroke(2.dp, Color(0x00ff41)), // 亮绿色边框
+        border = BorderStroke(2.dp, MaterialTheme.colorScheme.outline), // 使用主题的outline色
         colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = Color(0x00ff41), // 亮绿色文字
+            contentColor = MaterialTheme.colorScheme.onSurface, // 使用主题的onSurface
             disabledContentColor = Color(0x004400)
         ),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp) // 4dp圆角，接近方形
+        shape = RoundedCornerShape(8.dp) // 8dp圆角，保持方形但有美感
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.bodyLarge
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+            )
         )
     }
 }
@@ -93,16 +97,15 @@ fun HackerIconButton(
     Button(
         onClick = onClick,
         modifier = modifier
-            .width(48.dp)
-            .height(48.dp),
+            .size(48.dp),
         enabled = enabled,
         colors = ButtonDefaults.buttonColors(
-            containerColor = Color(0x00ff41), // 亮绿色背景
-            contentColor = Color(0x000000), // 黑色文字
+            containerColor = MaterialTheme.colorScheme.primary, // 使用主题的主色
+            contentColor = MaterialTheme.colorScheme.onPrimary, // 使用主题的onPrimary
             disabledContainerColor = Color(0x004400),
             disabledContentColor = Color(0x006600)
         ),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp) // 4dp圆角，接近方形
+        shape = RoundedCornerShape(8.dp) // 8dp圆角，保持方形但有美感
     ) {
         content()
     }

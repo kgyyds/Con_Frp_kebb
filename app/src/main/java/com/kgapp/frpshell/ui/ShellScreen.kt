@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import com.kgapp.frpshellpro.ui.components.HackerButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -89,8 +90,16 @@ fun ShellScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(onClick = onStartFrp, enabled = !frpRunning) { Text("启动 frp") }
-                Button(onClick = onStopFrp, enabled = frpRunning) { Text("停止 frp") }
+                HackerButton(
+                    text = "启动 frp",
+                    onClick = onStartFrp,
+                    enabled = !frpRunning
+                )
+                HackerButton(
+                    text = "停止 frp",
+                    onClick = onStopFrp,
+                    enabled = frpRunning
+                )
             }
         } else {
             LazyColumn(
@@ -103,12 +112,14 @@ fun ShellScreen(
                 itemsIndexed(commandItems) { _, item ->
                     Text(
                         text = "$ ${item.commandText}",
+                        color = MaterialTheme.colorScheme.onBackground,
                         fontFamily = FontFamily.Monospace,
                         fontSize = fontSizeSp.sp
                     )
                     if (item.outputText.isNotBlank()) {
                         Text(
                             text = parsedBuffer.update(item.outputText),
+                            color = MaterialTheme.colorScheme.onBackground,
                             fontFamily = FontFamily.Monospace,
                             fontSize = fontSizeSp.sp
                         )
@@ -116,6 +127,7 @@ fun ShellScreen(
                     val statusHint = if (item.status == ShellCommandStatus.RUNNING) "执行中..." else "命令完成"
                     Text(
                         text = statusHint,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace,
                         fontSize = (fontSizeSp - 2f).coerceAtLeast(10f).sp
                     )
@@ -143,7 +155,10 @@ fun ShellScreen(
                         fontSize = fontSizeSp.sp
                     )
                 )
-                Button(onClick = { submit() }) { Text("发送") }
+                HackerButton(
+                    text = "发送",
+                    onClick = { submit() }
+                )
             }
         }
     }

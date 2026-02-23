@@ -4,9 +4,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -43,7 +46,7 @@ fun PerformanceScreen(
             Button(onClick = onShowAppList, modifier = Modifier.fillMaxWidth()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Apps, contentDescription = null, modifier = Modifier.size(20.dp))
-                    androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text("应用列表")
                 }
             }

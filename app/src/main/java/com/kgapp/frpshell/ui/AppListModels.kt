@@ -1,10 +1,7 @@
 package com.kgapp.frpshell.ui
 
-import kotlinx.serialization.Serializable
-
-@Serializable
 data class AppInfo(
-    val package_name: String,
+    val packageName: String,
     val name: String,
     val system: Boolean
 )

@@ -51,7 +51,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val fileManagerUseCase = FileManagerUseCase(deviceCommandRepository)
     private val processUseCase = ProcessUseCase(shellUseCase, fileManagerUseCase)
     private val captureUseCase = CaptureUseCase(shellUseCase, fileManagerUseCase)
-    private val appListUseCase = AppListUseCase(shellUseCase, fileManagerUseCase, captureUseCase)
+    private val appListUseCase = com.kgapp.frpshellpro.domain.usecase.AppListUseCase(shellUseCase, fileManagerUseCase, captureUseCase)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()

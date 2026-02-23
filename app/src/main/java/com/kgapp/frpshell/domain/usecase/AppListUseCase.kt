@@ -1,12 +1,12 @@
-package com.kgapp.frpshell.domain.usecase
+package com.kgapp.frpshellpro.domain.usecase
 
-import com.kgapp.frpshell.ui.AppInfo
+import com.kgapp.frpshellpro.ui.AppInfo
 import org.json.JSONObject
 
 class AppListUseCase(
-    private val shellUseCase: ShellUseCase,
-    private val fileManagerUseCase: FileManagerUseCase,
-    private val captureUseCase: CaptureUseCase
+    private val shellUseCase: com.kgapp.frpshellpro.domain.usecase.ShellUseCase,
+    private val fileManagerUseCase: com.kgapp.frpshellpro.domain.usecase.FileManagerUseCase,
+    private val captureUseCase: com.kgapp.frpshellpro.domain.usecase.CaptureUseCase
 ) {
     suspend fun getAppList(clientId: String): List<AppInfo> {
         // Check if we can use pm command directly (more efficient)

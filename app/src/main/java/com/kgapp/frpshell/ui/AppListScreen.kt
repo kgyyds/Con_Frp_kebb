@@ -13,9 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -27,7 +28,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -58,8 +58,11 @@ fun AppListScreen(
             return
         }
 
-        Column(modifier = modifier.fillMaxSize().padding(contentPadding)) {
-            // Header
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentPadding)
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -73,7 +76,6 @@ fun AppListScreen(
                 }
             }
 
-            // Error message
             errorMessage?.let { message ->
                 Card(
                     modifier = Modifier
@@ -103,7 +105,6 @@ fun AppListScreen(
                 }
             }
 
-            // App list
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = PaddingValues(vertical = 8.dp)
@@ -123,10 +124,11 @@ private fun AppListItem(app: AppInfo) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (app.system)
+            containerColor = if (app.system) {
                 MaterialTheme.colorScheme.secondaryContainer
-            else
+            } else {
                 MaterialTheme.colorScheme.surface
+            }
         )
     ) {
         Row(

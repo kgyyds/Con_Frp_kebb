@@ -1,6 +1,6 @@
 package com.kgapp.frpshellpro.domain.usecase
 
-import com.kgapp.frpshell.ui.AppInfo
+import com.kgapp.frpshell.domain.usecase.AppInfo
 import org.json.JSONObject
 
 class AppListUseCase(
@@ -57,7 +57,7 @@ class AppListUseCase(
                 val appName = getAppName(packageName, isSystem)
 
                 apps.add(AppInfo(
-                    package_name = packageName,
+                    packageName = packageName,
                     name = appName,
                     system = isSystem
                 ))
@@ -86,7 +86,7 @@ class AppListUseCase(
                 val isSystem = false
 
                 apps.add(AppInfo(
-                    package_name = packageName,
+                    packageName = packageName,
                     name = appName,
                     system = isSystem
                 ))

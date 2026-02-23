@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -108,7 +108,7 @@ fun AppListScreen(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
-                items(apps, key = { it.package_name }) { app ->
+                items(apps, key = { it.packageName }) { app ->
                     AppListItem(app = app)
                 }
             }
@@ -143,7 +143,7 @@ private fun AppListItem(app: AppInfo) {
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    text = app.package_name,
+                    text = app.packageName,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

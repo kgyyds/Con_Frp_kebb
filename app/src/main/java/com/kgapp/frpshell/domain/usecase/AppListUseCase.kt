@@ -1,6 +1,6 @@
 package com.kgapp.frpshellpro.domain.usecase
 
-import com.kgapp.frpshellpro.ui.AppInfo
+import com.kgapp.frpshell.ui.AppInfo
 import org.json.JSONObject
 
 class AppListUseCase(

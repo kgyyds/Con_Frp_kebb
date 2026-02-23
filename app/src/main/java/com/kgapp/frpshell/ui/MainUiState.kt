@@ -7,6 +7,12 @@ import com.kgapp.frpshellpro.ui.state.FrpUiState
 import com.kgapp.frpshellpro.ui.state.ShellUiState
 import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
+data class AppInfo(
+    val packageName: String,
+    val name: String,
+    val system: Boolean
+)
+
 enum class ScreenDestination {
     Main,
     Settings,

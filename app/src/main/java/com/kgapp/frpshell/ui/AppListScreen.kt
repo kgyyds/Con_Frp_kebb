@@ -70,7 +70,7 @@ fun AppListScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("应用列表", style = MaterialTheme.typography.titleLarge)
+                Text("应用列表数据", style = MaterialTheme.typography.titleLarge)
                 IconButton(onClick = onRefresh) {
                     Icon(Icons.Default.Refresh, contentDescription = "刷新")
                 }

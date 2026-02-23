@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
@@ -162,6 +163,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 else if (uiState.processListVisible) "运行的程序"
                                 else if (uiState.screenViewerVisible) "屏幕截图"
                                 else if (isDeviceInfo) "设备信息"
+                                else if (uiState.screen == ScreenDestination.AppList) "应用列表"
                                 else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
                             )
@@ -176,13 +178,14 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                         uiState.fileManagerVisible -> vm.closeFileManager()
                                         uiState.processListVisible -> vm.closePerformance()
                                         uiState.screenViewerVisible -> vm.closeScreenViewer()
+                                        uiState.screen == ScreenDestination.AppList -> vm.hideAppList()
                                         else -> scope.launch { drawerState.open() }
                                     }
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible) "back" else "open drawer"
+                                    if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.AppList) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.AppList) "back" else "open drawer"
                                 )
                             }
                         },
@@ -206,6 +209,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                     onOpenFileManager = vm::openFileManager,
                                     onOpenRunningPrograms = vm::openRunningPrograms,
                                     onShowDeviceInfo = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showDeviceInfo) },
+                                    onShowAppList = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showAppList) },
                                     onRefreshProcessList = vm::refreshRunningPrograms,
                                     processListVisible = uiState.processListVisible
                                 )
@@ -285,6 +289,18 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             onSortByPid = { vm.updateProcessSort(ProcessSortField.PID) },
                             onSortByRss = { vm.updateProcessSort(ProcessSortField.RSS) },
                             onClickItem = vm::requestKillProcess,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    uiState.screen == ScreenDestination.AppList -> {
+                        AppListScreen(
+                            contentPadding = padding,
+                            loading = uiState.appListLoading,
+                            loadingText = uiState.appListLoadingText,
+                            apps = uiState.appListItems,
+                            errorMessage = uiState.appListErrorMessage,
+                            onRefresh = vm::refreshAppList,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -460,6 +476,7 @@ private fun TopBarMenus(
     onOpenFileManager: () -> Unit,
     onOpenRunningPrograms: () -> Unit,
     onShowDeviceInfo: () -> Unit,
+    onShowAppList: () -> Unit,
     onRefreshProcessList: () -> Unit,
     processListVisible: Boolean
 ) {
@@ -489,6 +506,14 @@ private fun TopBarMenus(
                 onClick = {
                     performanceMenuExpanded = false
                     onShowDeviceInfo()
+                }
+            )
+            TopMenuItem(
+                text = "应用列表",
+                icon = Icons.Default.Apps,
+                onClick = {
+                    performanceMenuExpanded = false
+                    onShowAppList()
                 }
             )
         }

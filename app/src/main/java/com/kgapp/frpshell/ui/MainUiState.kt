@@ -10,7 +10,8 @@ import com.kgapp.frpshellpro.ui.theme.ThemeMode
 enum class ScreenDestination {
     Main,
     Settings,
-    DeviceInfo
+    DeviceInfo,
+    AppList
 }
 
 data class MainUiState(
@@ -70,6 +71,12 @@ data class MainUiState(
     val deviceInfoLoading: Boolean = false,
     val deviceInfoErrorMessage: String? = null,
     val deviceInfoCards: List<DeviceInfoCard> = emptyList(),
+    val appListVisible: Boolean = false,
+    val appListLoading: Boolean = false,
+    val appListLoadingText: String = "正在获取应用列表...",
+    val appListItems: List<AppInfo> = emptyList(),
+    val appListErrorMessage: String? = null,
+    val appListClientId: String? = null,
     val clientModels: Map<String, ClientDisplayInfo> = emptyMap(),
     val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap()
 )

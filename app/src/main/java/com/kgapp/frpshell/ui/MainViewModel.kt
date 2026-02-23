@@ -51,6 +51,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val fileManagerUseCase = FileManagerUseCase(deviceCommandRepository)
     private val processUseCase = ProcessUseCase(shellUseCase, fileManagerUseCase)
     private val captureUseCase = CaptureUseCase(shellUseCase, fileManagerUseCase)
+    private val appListUseCase = AppListUseCase(shellUseCase, fileManagerUseCase, captureUseCase)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -535,6 +536,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 deviceInfoErrorMessage = null,
                 deviceInfoCards = emptyList()
             )
+        }
+    }
+
+    fun showAppList(clientId: String) {
+        _uiState.update {
+            it.copy(
+                screen = ScreenDestination.AppList,
+                appListClientId = clientId
+            )
+        }
+        loadAppList(clientId)
+    }
+
+    fun hideAppList() {
+        _uiState.update {
+            it.copy(
+                screen = ScreenDestination.Main,
+                appListVisible = false,
+                appListLoading = false,
+                appListItems = emptyList(),
+                appListErrorMessage = null,
+                appListClientId = null
+            )
+        }
+    }
+
+    fun refreshAppList() {
+        val clientId = _uiState.value.appListClientId ?: (_uiState.value.selectedTarget as? ShellTarget.Client)?.id ?: return
+        loadAppList(clientId)
+    }
+
+    private fun loadAppList(clientId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(appListLoading = true, appListErrorMessage = null) }
+
+            try {
+                val apps = appListUseCase.getAppList(clientId)
+                _uiState.update {
+                    it.copy(
+                        appListLoading = false,
+                        appListItems = apps,
+                        appListErrorMessage = null
+                    )
+                }
+                FrpLogBus.append("[应用] 已加载应用列表，共 ${apps.size} 个应用")
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        appListLoading = false,
+                        appListErrorMessage = "获取应用列表失败: ${e.message}"
+                    )
+                }
+                FrpLogBus.append("[应用] 获取应用列表失败: ${e.message}")
+            }
         }
     }
 

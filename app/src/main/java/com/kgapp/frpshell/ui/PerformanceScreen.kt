@@ -8,17 +8,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 
 @Composable
 fun PerformanceScreen(
     contentPadding: PaddingValues,
     onOpenRunningPrograms: () -> Unit,
+    onShowDeviceInfo: () -> Unit,
+    onShowAppList: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -32,6 +36,16 @@ fun PerformanceScreen(
             Text("性能工具", style = MaterialTheme.typography.titleMedium)
             Button(onClick = onOpenRunningPrograms, modifier = Modifier.fillMaxWidth()) {
                 Text("运行的程序")
+            }
+            Button(onClick = onShowDeviceInfo, modifier = Modifier.fillMaxWidth()) {
+                Text("应用信息")
+            }
+            Button(onClick = onShowAppList, modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Apps, contentDescription = null, modifier = Modifier.size(20.dp))
+                    androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
+                    Text("应用列表")
+                }
             }
         }
     }

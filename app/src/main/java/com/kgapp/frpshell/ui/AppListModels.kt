@@ -1,10 +1,4 @@
-package com.kgapp.frpshell.ui
-
-data class AppInfo(
-    val packageName: String,
-    val name: String,
-    val system: Boolean
-)
+package com.kgapp.frpshellpro.ui
 
 data class AppListUiState(
     val visible: Boolean = false,

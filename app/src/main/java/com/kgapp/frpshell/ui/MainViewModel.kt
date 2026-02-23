@@ -572,7 +572,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(appListLoading = true, appListErrorMessage = null) }
 
             try {
-                val apps = appListUseCase.getAppList(clientId)
+                val appContext = getApplication<Application>()
+                val localJar = File(appContext.filesDir, "scrcpy-server.jar")
+                if (!localJar.exists() || localJar.length() == 0L) {
+                    copyAssetToFile(appContext, "scrcpy-server.jar", localJar)
+                }
+
+                val apps = appListUseCase.getAppList(clientId, localJar)
                 _uiState.update {
                     it.copy(
                         appListLoading = false,

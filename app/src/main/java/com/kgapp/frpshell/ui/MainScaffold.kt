@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
@@ -165,6 +166,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 else if (uiState.screenViewerVisible) "屏幕截图"
                                 else if (isDeviceInfo) "设备信息"
                                 else if (uiState.screen == ScreenDestination.GetInfoPlugin) "GetInfo 插件"
+                                else if (uiState.screen == ScreenDestination.GetLocPlugin) "GetLoc 插件"
                                 else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
                             )
@@ -180,13 +182,14 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                         uiState.processListVisible -> vm.closePerformance()
                                         uiState.screenViewerVisible -> vm.closeScreenViewer()
                                         uiState.screen == ScreenDestination.GetInfoPlugin -> vm.dismissGetInfoPlugin()
+                                        uiState.screen == ScreenDestination.GetLocPlugin -> vm.dismissGetLocPlugin()
                                         else -> scope.launch { drawerState.open() }
                                     }
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.GetInfoPlugin) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.GetInfoPlugin) "back" else "open drawer"
+                                    if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.GetInfoPlugin || uiState.screen == ScreenDestination.GetLocPlugin) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.GetInfoPlugin || uiState.screen == ScreenDestination.GetLocPlugin) "back" else "open drawer"
                                 )
                             }
                         },
@@ -211,6 +214,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                     onOpenRunningPrograms = vm::openRunningPrograms,
                                     onShowDeviceInfo = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showDeviceInfo) },
                                     onShowGetInfoPlugin = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showGetInfoPlugin) },
+                                    onShowGetLocPlugin = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showGetLocPlugin) },
                                     onRefreshProcessList = vm::refreshRunningPrograms,
                                     processListVisible = uiState.processListVisible
                                 )
@@ -315,6 +319,21 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             contactItems = uiState.contactItems,
                             onContactCountChange = vm::onContactCountChanged,
                             onReadContact = vm::refreshContacts,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    uiState.screen == ScreenDestination.GetLocPlugin -> {
+                        GetLocPluginScreen(
+                            contentPadding = padding,
+                            loading = uiState.getLocLoading,
+                            errorMessage = uiState.getLocErrorMessage,
+                            locationInfo = uiState.locationInfo,
+                            addressLoading = uiState.locationAddressLoading,
+                            address = uiState.locationAddress,
+                            addressErrorMessage = uiState.locationAddressErrorMessage,
+                            onFetchLocation = vm::fetchLocationByPlugin,
+                            onResolveAddress = vm::resolveLocationAddress,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -491,6 +510,7 @@ private fun TopBarMenus(
     onOpenRunningPrograms: () -> Unit,
     onShowDeviceInfo: () -> Unit,
     onShowGetInfoPlugin: () -> Unit,
+    onShowGetLocPlugin: () -> Unit,
     onRefreshProcessList: () -> Unit,
     processListVisible: Boolean
 ) {
@@ -546,6 +566,14 @@ private fun TopBarMenus(
                 onClick = {
                     pluginMenuExpanded = false
                     onOpenCamera()
+                }
+            )
+            TopMenuItem(
+                text = "GetLoc",
+                icon = Icons.Default.LocationOn,
+                onClick = {
+                    pluginMenuExpanded = false
+                    onShowGetLocPlugin()
                 }
             )
         }

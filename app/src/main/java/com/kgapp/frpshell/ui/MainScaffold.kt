@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
@@ -163,7 +165,8 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 else if (uiState.processListVisible) "运行的程序"
                                 else if (uiState.screenViewerVisible) "屏幕截图"
                                 else if (isDeviceInfo) "设备信息"
-                                else if (uiState.screen == ScreenDestination.AppList) "应用列表"
+                                else if (uiState.screen == ScreenDestination.GetInfoPlugin) "GetInfo 插件"
+                                else if (uiState.screen == ScreenDestination.GetLocPlugin) "GetLoc 插件"
                                 else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
                             )
@@ -178,14 +181,15 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                         uiState.fileManagerVisible -> vm.closeFileManager()
                                         uiState.processListVisible -> vm.closePerformance()
                                         uiState.screenViewerVisible -> vm.closeScreenViewer()
-                                        uiState.screen == ScreenDestination.AppList -> vm.hideAppList()
+                                        uiState.screen == ScreenDestination.GetInfoPlugin -> vm.dismissGetInfoPlugin()
+                                        uiState.screen == ScreenDestination.GetLocPlugin -> vm.dismissGetLocPlugin()
                                         else -> scope.launch { drawerState.open() }
                                     }
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.AppList) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.AppList) "back" else "open drawer"
+                                    if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.GetInfoPlugin || uiState.screen == ScreenDestination.GetLocPlugin) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.GetInfoPlugin || uiState.screen == ScreenDestination.GetLocPlugin) "back" else "open drawer"
                                 )
                             }
                         },
@@ -209,7 +213,8 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                     onOpenFileManager = vm::openFileManager,
                                     onOpenRunningPrograms = vm::openRunningPrograms,
                                     onShowDeviceInfo = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showDeviceInfo) },
-                                    onShowAppList = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showAppList) },
+                                    onShowGetInfoPlugin = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showGetInfoPlugin) },
+                                    onShowGetLocPlugin = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showGetLocPlugin) },
                                     onRefreshProcessList = vm::refreshRunningPrograms,
                                     processListVisible = uiState.processListVisible
                                 )
@@ -293,14 +298,46 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         )
                     }
 
-                    uiState.screen == ScreenDestination.AppList -> {
-                        AppListScreen(
+                    uiState.screen == ScreenDestination.GetInfoPlugin -> {
+                        GetInfoPluginScreen(
                             contentPadding = padding,
-                            loading = uiState.appListLoading,
-                            loadingText = uiState.appListLoadingText,
-                            apps = uiState.appListItems,
-                            errorMessage = uiState.appListErrorMessage,
-                            onRefresh = vm::refreshAppList,
+                            callLogLoading = uiState.callLogLoading,
+                            callLogErrorMessage = uiState.callLogErrorMessage,
+                            callLogCountInput = uiState.callLogCountInput,
+                            callLogItems = uiState.callLogItems,
+                            onCallLogCountChange = vm::onCallLogCountChanged,
+                            onReadCallLog = vm::refreshCallLogs,
+                            smsLoading = uiState.smsLoading,
+                            smsErrorMessage = uiState.smsErrorMessage,
+                            smsCountInput = uiState.smsCountInput,
+                            smsItems = uiState.smsItems,
+                            onSmsCountChange = vm::onSmsCountChanged,
+                            onReadSms = vm::refreshSms,
+                            contactLoading = uiState.contactLoading,
+                            contactErrorMessage = uiState.contactErrorMessage,
+                            contactCountInput = uiState.contactCountInput,
+                            contactItems = uiState.contactItems,
+                            onContactCountChange = vm::onContactCountChanged,
+                            onReadContact = vm::refreshContacts,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    uiState.screen == ScreenDestination.GetLocPlugin -> {
+                        GetLocPluginScreen(
+                            contentPadding = padding,
+                            loading = uiState.getLocLoading,
+                            errorMessage = uiState.getLocErrorMessage,
+                            locationInfo = uiState.locationInfo,
+                            intlAddressLoading = uiState.locationAddressIntlLoading,
+                            intlAddress = uiState.locationAddressIntl,
+                            intlAddressErrorMessage = uiState.locationAddressIntlErrorMessage,
+                            cnAddressLoading = uiState.locationAddressCnLoading,
+                            cnAddress = uiState.locationAddressCn,
+                            cnAddressErrorMessage = uiState.locationAddressCnErrorMessage,
+                            onFetchLocation = vm::fetchLocationByPlugin,
+                            onResolveAddressIntl = vm::resolveLocationAddressIntl,
+                            onResolveAddressCn = vm::resolveLocationAddressCn,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -476,13 +513,15 @@ private fun TopBarMenus(
     onOpenFileManager: () -> Unit,
     onOpenRunningPrograms: () -> Unit,
     onShowDeviceInfo: () -> Unit,
-    onShowAppList: () -> Unit,
+    onShowGetInfoPlugin: () -> Unit,
+    onShowGetLocPlugin: () -> Unit,
     onRefreshProcessList: () -> Unit,
     processListVisible: Boolean
 ) {
     var imageMenuExpanded by remember { mutableStateOf(false) }
     var fileMenuExpanded by remember { mutableStateOf(false) }
     var performanceMenuExpanded by remember { mutableStateOf(false) }
+    var pluginMenuExpanded by remember { mutableStateOf(false) }
 
     if (showClientActions) {
         IconButton(onClick = { performanceMenuExpanded = true }) {
@@ -508,12 +547,37 @@ private fun TopBarMenus(
                     onShowDeviceInfo()
                 }
             )
+        }
+
+        IconButton(onClick = { pluginMenuExpanded = true }) {
+            Icon(Icons.Default.Extension, contentDescription = "插件菜单")
+        }
+        DropdownMenu(
+            expanded = pluginMenuExpanded,
+            onDismissRequest = { pluginMenuExpanded = false }
+        ) {
             TopMenuItem(
-                text = "应用列表",
-                icon = Icons.Default.Apps,
+                text = "GetInfo",
+                icon = Icons.Default.Call,
                 onClick = {
-                    performanceMenuExpanded = false
-                    onShowAppList()
+                    pluginMenuExpanded = false
+                    onShowGetInfoPlugin()
+                }
+            )
+            TopMenuItem(
+                text = "GetPhoto - 拍照",
+                icon = Icons.Default.PhotoCamera,
+                onClick = {
+                    pluginMenuExpanded = false
+                    onOpenCamera()
+                }
+            )
+            TopMenuItem(
+                text = "GetLoc",
+                icon = Icons.Default.LocationOn,
+                onClick = {
+                    pluginMenuExpanded = false
+                    onShowGetLocPlugin()
                 }
             )
         }
@@ -542,14 +606,6 @@ private fun TopBarMenus(
             expanded = imageMenuExpanded,
             onDismissRequest = { imageMenuExpanded = false }
         ) {
-            TopMenuItem(
-                text = "拍照",
-                icon = Icons.Default.PhotoCamera,
-                onClick = {
-                    imageMenuExpanded = false
-                    onOpenCamera()
-                }
-            )
             TopMenuItem(
                 text = "截屏",
                 icon = Icons.Default.Image,

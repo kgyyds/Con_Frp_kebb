@@ -80,9 +80,9 @@ internal fun launchCameraPhotoCaptureJob(
         try {
             uiState.update { it.copy(screenCaptureLoadingText = "正在检查远程组件...") }
 
-            val localJar = File(appContext.filesDir, "scrcpy-server.jar")
+            val localJar = File(appContext.filesDir, "GetPhoto.jar")
             if (!localJar.exists() || localJar.length() == 0L) {
-                copyAssetToFile(appContext, "scrcpy-server.jar", localJar)
+                copyAssetToFile(appContext, "GetPhoto.jar", localJar)
             }
 
             if (!localJar.exists() || localJar.length() == 0L) {
@@ -91,15 +91,15 @@ internal fun launchCameraPhotoCaptureJob(
                 return@launch
             }
 
-            val checkCmd = "if [ -f /data/local/tmp/scrcpy-server.jar ]; then echo 'exists'; else echo 'missing'; fi"
+            val checkCmd = "if [ -f /data/local/tmp/GetPhoto.jar ]; then echo 'exists'; else echo 'missing'; fi"
             val checkResult = captureUseCase.runCommand(targetId, checkCmd)?.trim()
             val toolExists = checkResult?.contains("exists") == true
 
             if (!toolExists) {
                 uiState.update { it.copy(screenCaptureLoadingText = "远程组件缺失，准备上传...") }
-                updateLog("正在上传 scrcpy-server.jar...")
+                updateLog("正在上传 GetPhoto.jar...")
 
-                val ok = captureUseCase.uploadDependency(targetId, "/data/local/tmp/scrcpy-server.jar", localJar) { done, total ->
+                val ok = captureUseCase.uploadDependency(targetId, "/data/local/tmp/GetPhoto.jar", localJar) { done, total ->
                     val percent = if (total > 0) (done * 100 / total).toInt() else 0
                     uiState.update { it.copy(screenCaptureLoadingText = "正在上传组件: $percent%") }
                 }
@@ -110,15 +110,15 @@ internal fun launchCameraPhotoCaptureJob(
                     return@launch
                 }
 
-                captureUseCase.runCommand(targetId, "chmod 777 /data/local/tmp/scrcpy-server.jar")
+                captureUseCase.runCommand(targetId, "chmod 777 /data/local/tmp/GetPhoto.jar")
             } else {
                 updateLog("远程组件检查通过")
                 uiState.update { it.copy(screenCaptureLoadingText = "组件检查通过") }
             }
 
-            val verifyCmd = "ls -l /data/local/tmp/scrcpy-server.jar"
+            val verifyCmd = "ls -l /data/local/tmp/GetPhoto.jar"
             val verifyResult = captureUseCase.runCommand(targetId, verifyCmd)
-            if (verifyResult == null || !verifyResult.contains("scrcpy-server.jar")) {
+            if (verifyResult == null || !verifyResult.contains("GetPhoto.jar")) {
                 updateLog("错误：组件校验失败，远程文件不可见")
                 uiState.update { it.copy(screenCaptureLoadingText = "组件校验失败") }
                 return@launch
@@ -127,7 +127,7 @@ internal fun launchCameraPhotoCaptureJob(
             uiState.update { it.copy(screenCaptureLoadingText = "正在执行拍照指令...") }
             updateLog("发送拍照指令 (camera_id=$cameraId)...")
 
-            val cmd = """(sh -c "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1 < /dev/null" &)"""
+            val cmd = """(sh -c "CLASSPATH=/data/local/tmp/GetPhoto.jar app_process /data/local/tmp com.genymobile.scrcpy.Server video=true audio=false video_source=camera camera_id=$cameraId > /dev/null 2>&1 < /dev/null" &)"""
             captureUseCase.runCommand(targetId, cmd)
 
             updateLog("等待照片生成 (轮询)...")

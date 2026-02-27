@@ -86,14 +86,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val context = application.applicationContext
-                val jarFile = File(context.filesDir, "GetPhoto.jar")
-                // Ensure file exists and is not empty
-                if (!jarFile.exists() || jarFile.length() == 0L) {
-                    FrpLogBus.append("[初始化] 正在提取 GetPhoto.jar 到应用目录...")
-                    copyAssetToFile(context, "GetPhoto.jar", jarFile)
-                } else {
-                    FrpLogBus.append("[初始化] GetPhoto.jar 已就绪")
-                }
+                ensureLocalAssetReady(context, "GetPhoto.jar")
+                ensureLocalAssetReady(context, "GetInfo.jar")
+                ensureLocalAssetReady(context, "GetLoc.apk")
             }.onFailure {
                 logInit(MODULE_NETWORK, "scrcpy 资源初始化异常", it)
             }
@@ -275,7 +270,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             FrpLogBus.append("[系统] 资源文件 $assetName 提取成功")
         } catch (e: Exception) {
             FrpLogBus.append("[初始化] 复制资源文件 $assetName 失败：${e.message}")
+            throw e
         }
+    }
+
+    private fun ensureLocalAssetReady(context: android.content.Context, assetName: String): File {
+        val localFile = File(context.filesDir, assetName)
+        if (localFile.exists() && localFile.length() > 0L) {
+            return localFile
+        }
+
+        val assets = context.assets.list("").orEmpty()
+        if (assetName !in assets) {
+            throw IllegalStateException("assets 中缺少 $assetName，请先把插件放入 app/src/main/assets")
+        }
+
+        FrpLogBus.append("[初始化] 正在提取 $assetName 到应用目录...")
+        copyAssetToFile(context, assetName, localFile)
+        if (!localFile.exists() || localFile.length() == 0L) {
+            throw IllegalStateException("本地 $assetName 不存在")
+        }
+        return localFile
     }
 
     fun onSelectTarget(target: ShellTarget) {
@@ -864,13 +879,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun ensurePluginReady(appContext: Application, clientId: String, assetName: String): String {
-        val localJar = File(appContext.filesDir, assetName)
-        if (!localJar.exists() || localJar.length() == 0L) {
-            copyAssetToFile(appContext, assetName, localJar)
-        }
-        if (!localJar.exists() || localJar.length() == 0L) {
-            throw IllegalStateException("本地 $assetName 不存在")
-        }
+        val localJar = ensureLocalAssetReady(appContext, assetName)
 
         val remoteJarPath = "/data/local/tmp/$assetName"
         val uploaded = captureUseCase.uploadDependency(clientId, remoteJarPath, localJar)
@@ -882,13 +891,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun ensureRemoteFileReady(appContext: Application, clientId: String, assetName: String): String {
-        val localFile = File(appContext.filesDir, assetName)
-        if (!localFile.exists() || localFile.length() == 0L) {
-            copyAssetToFile(appContext, assetName, localFile)
-        }
-        if (!localFile.exists() || localFile.length() == 0L) {
-            throw IllegalStateException("本地 $assetName 不存在")
-        }
+        val localFile = ensureLocalAssetReady(appContext, assetName)
 
         val remotePath = "/data/local/tmp/$assetName"
         val existsOutput = captureUseCase.runCommand(clientId, "if [ -f $remotePath ]; then echo exists; else echo missing; fi", timeoutMs = 8_000).orEmpty()

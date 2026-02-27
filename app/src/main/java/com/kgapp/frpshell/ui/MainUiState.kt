@@ -118,9 +118,12 @@ data class MainUiState(
     val getLocLoading: Boolean = false,
     val getLocErrorMessage: String? = null,
     val locationInfo: LocationInfo? = null,
-    val locationAddressLoading: Boolean = false,
-    val locationAddress: String? = null,
-    val locationAddressErrorMessage: String? = null,
+    val locationAddressIntlLoading: Boolean = false,
+    val locationAddressIntl: String? = null,
+    val locationAddressIntlErrorMessage: String? = null,
+    val locationAddressCnLoading: Boolean = false,
+    val locationAddressCn: String? = null,
+    val locationAddressCnErrorMessage: String? = null,
     val clientModels: Map<String, ClientDisplayInfo> = emptyMap(),
     val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap()
 )

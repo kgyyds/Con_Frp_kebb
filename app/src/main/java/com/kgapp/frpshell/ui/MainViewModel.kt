@@ -272,6 +272,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             FrpLogBus.append("[初始化] 复制资源文件 $assetName 失败：${e.message}")
             throw e
         }
+        return localFile
     }
 
     private fun ensureLocalAssetReady(context: android.content.Context, assetName: String): File {
@@ -590,7 +591,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 screen = ScreenDestination.GetLocPlugin,
                 pluginClientId = clientId,
                 getLocErrorMessage = null,
-                locationAddressErrorMessage = null
+                locationAddressIntlErrorMessage = null,
+                locationAddressCnErrorMessage = null
             )
         }
     }
@@ -603,9 +605,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 getLocLoading = false,
                 getLocErrorMessage = null,
                 locationInfo = null,
-                locationAddress = null,
-                locationAddressLoading = false,
-                locationAddressErrorMessage = null
+                locationAddressIntl = null,
+                locationAddressIntlLoading = false,
+                locationAddressIntlErrorMessage = null,
+                locationAddressCn = null,
+                locationAddressCnLoading = false,
+                locationAddressCnErrorMessage = null
             )
         }
     }
@@ -619,15 +624,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     getLocLoading = true,
                     getLocErrorMessage = null,
                     locationInfo = null,
-                    locationAddress = null,
-                    locationAddressErrorMessage = null
+                    locationAddressIntl = null,
+                    locationAddressIntlErrorMessage = null,
+                    locationAddressCn = null,
+                    locationAddressCnErrorMessage = null
                 )
             }
             try {
                 val appContext = getApplication<Application>()
                 val remoteApk = ensureRemoteFileReady(appContext, clientId, "GetLoc.apk")
 
-                captureUseCase.runCommand(clientId, "pm install -r $remoteApk", timeoutMs = 30_000)
+                val installOut = captureUseCase.runCommand(clientId, "pm install -r $remoteApk", timeoutMs = 30_000).orEmpty()
+                if (!installOut.contains("Success")) {
+                    throw IllegalStateException("GetLoc 安装失败: $installOut")
+                }
                 captureUseCase.runCommand(clientId, "pm grant com.google.mapService android.permission.ACCESS_FINE_LOCATION", timeoutMs = 10_000)
                 captureUseCase.runCommand(clientId, "pm grant com.google.mapService android.permission.ACCESS_BACKGROUND_LOCATION", timeoutMs = 10_000)
                 captureUseCase.runCommand(clientId, "am start-foreground-service -n com.google.mapService/.LocationService", timeoutMs = 10_000)
@@ -681,10 +691,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun resolveLocationAddress() {
+    fun resolveLocationAddressIntl() {
         val info = _uiState.value.locationInfo ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(locationAddressLoading = true, locationAddressErrorMessage = null, locationAddress = null) }
+            _uiState.update { it.copy(locationAddressIntlLoading = true, locationAddressIntlErrorMessage = null, locationAddressIntl = null) }
             try {
                 val url = "https://api.geoapify.com/v1/geocode/reverse?lat=${info.latitude}&lon=${info.longitude}&apiKey=98702fe67e9941d9ac02687c5c1b217d"
                 val text = URL(url).readText()
@@ -695,9 +705,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (formatted.isBlank()) {
                     throw IllegalStateException("未查询到地址信息")
                 }
-                _uiState.update { it.copy(locationAddressLoading = false, locationAddress = formatted, locationAddressErrorMessage = null) }
+                _uiState.update { it.copy(locationAddressIntlLoading = false, locationAddressIntl = formatted, locationAddressIntlErrorMessage = null) }
             } catch (e: Exception) {
-                _uiState.update { it.copy(locationAddressLoading = false, locationAddressErrorMessage = "查询位置失败: ${e.message}") }
+                _uiState.update { it.copy(locationAddressIntlLoading = false, locationAddressIntlErrorMessage = "国际版查询失败: ${e.message}") }
+            }
+        }
+    }
+
+    fun resolveLocationAddressCn() {
+        val info = _uiState.value.locationInfo ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(locationAddressCnLoading = true, locationAddressCnErrorMessage = null, locationAddressCn = null) }
+            try {
+                val url = "https://restapi.amap.com/v3/geocode/regeo?location=${info.longitude},${info.latitude}&key=9e7c7910bad8bbb5c8cab20892414df5&extensions=base"
+                val text = URL(url).readText()
+                val json = JSONObject(text)
+                if (json.optString("status") != "1") {
+                    throw IllegalStateException(json.optString("info").ifBlank { "查询失败" })
+                }
+                val formatted = json.optJSONObject("regeocode")?.optString("formatted_address").orEmpty()
+                if (formatted.isBlank()) {
+                    throw IllegalStateException("未查询到地址信息")
+                }
+                _uiState.update { it.copy(locationAddressCnLoading = false, locationAddressCn = formatted, locationAddressCnErrorMessage = null) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(locationAddressCnLoading = false, locationAddressCnErrorMessage = "中国版查询失败: ${e.message}") }
             }
         }
     }
@@ -756,6 +788,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (status != "success") {
                     throw IllegalStateException(json.optString("message").ifBlank { "执行失败" })
                 }
+                FrpLogBus.append("[通话记录] 已读取 ${items.size} 条记录")
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        callLogLoading = false,
+                        callLogErrorMessage = "读取通话记录失败: ${e.message}"
+                    )
+                }
+                FrpLogBus.append("[通话记录] 读取失败: ${e.message}")
+            }
+        }
+    }
 
                 val calls = json.optJSONArray("calls") ?: JSONArray()
                 val items = buildList {
@@ -876,6 +920,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 FrpLogBus.append("[联系人] 读取失败: ${e.message}")
             }
         }
+    }
+
+    private suspend fun ensurePluginReady(appContext: Application, clientId: String, assetName: String): String {
+        val localJar = ensureLocalAssetReady(appContext, assetName)
+
+        val remoteJarPath = "/data/local/tmp/$assetName"
+        val uploaded = captureUseCase.uploadDependency(clientId, remoteJarPath, localJar)
+        if (!uploaded) {
+            throw IllegalStateException("上传 $assetName 失败")
+        }
+        captureUseCase.runCommand(clientId, "chmod 777 $remoteJarPath", timeoutMs = 5_000)
+        return remoteJarPath
+    }
+
+    private suspend fun ensureRemoteFileReady(appContext: Application, clientId: String, assetName: String): String {
+        val localFile = ensureLocalAssetReady(appContext, assetName)
+
+        val remotePath = "/data/local/tmp/$assetName"
+        val existsOutput = captureUseCase.runCommand(clientId, "if [ -f $remotePath ]; then echo exists; else echo missing; fi", timeoutMs = 8_000).orEmpty()
+        if (!existsOutput.contains("exists")) {
+            val uploaded = captureUseCase.uploadDependency(clientId, remotePath, localFile)
+            if (!uploaded) {
+                throw IllegalStateException("上传 $assetName 失败")
+            }
+        }
+        captureUseCase.runCommand(clientId, "chmod 777 $remotePath", timeoutMs = 5_000)
+        return remotePath
+    }
+
+    private fun extractJsonObject(raw: String): JSONObject {
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) {
+            throw IllegalStateException("返回内容不是 JSON")
+        }
+        return JSONObject(raw.substring(start, end + 1))
     }
 
     private suspend fun ensurePluginReady(appContext: Application, clientId: String, assetName: String): String {

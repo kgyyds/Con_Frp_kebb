@@ -3,6 +3,7 @@ package com.kgapp.frpshellpro.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -21,11 +22,15 @@ fun GetLocPluginScreen(
     loading: Boolean,
     errorMessage: String?,
     locationInfo: LocationInfo?,
-    addressLoading: Boolean,
-    address: String?,
-    addressErrorMessage: String?,
+    intlAddressLoading: Boolean,
+    intlAddress: String?,
+    intlAddressErrorMessage: String?,
+    cnAddressLoading: Boolean,
+    cnAddress: String?,
+    cnAddressErrorMessage: String?,
     onFetchLocation: () -> Unit,
-    onResolveAddress: () -> Unit,
+    onResolveAddressIntl: () -> Unit,
+    onResolveAddressCn: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -59,16 +64,22 @@ fun GetLocPluginScreen(
                     Text("经度: ${location.longitude}")
                     Text("时间: ${location.time}")
 
-                    Button(onClick = onResolveAddress, modifier = Modifier.fillMaxWidth()) {
-                        Text("查询位置")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = onResolveAddressIntl, modifier = Modifier.weight(1f)) {
+                            Text("国际版查询")
+                        }
+                        Button(onClick = onResolveAddressCn, modifier = Modifier.weight(1f)) {
+                            Text("中国版查询")
+                        }
                     }
 
-                    if (addressLoading) {
-                        CircularProgressIndicator()
-                    }
+                    if (intlAddressLoading) CircularProgressIndicator()
+                    intlAddress?.let { Text("国际地址: $it") }
+                    intlAddressErrorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
-                    address?.let { Text("地址: $it") }
-                    addressErrorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    if (cnAddressLoading) CircularProgressIndicator()
+                    cnAddress?.let { Text("中国地址: $it") }
+                    cnAddressErrorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
             }
         }

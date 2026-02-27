@@ -329,11 +329,15 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             loading = uiState.getLocLoading,
                             errorMessage = uiState.getLocErrorMessage,
                             locationInfo = uiState.locationInfo,
-                            addressLoading = uiState.locationAddressLoading,
-                            address = uiState.locationAddress,
-                            addressErrorMessage = uiState.locationAddressErrorMessage,
+                            intlAddressLoading = uiState.locationAddressIntlLoading,
+                            intlAddress = uiState.locationAddressIntl,
+                            intlAddressErrorMessage = uiState.locationAddressIntlErrorMessage,
+                            cnAddressLoading = uiState.locationAddressCnLoading,
+                            cnAddress = uiState.locationAddressCn,
+                            cnAddressErrorMessage = uiState.locationAddressCnErrorMessage,
                             onFetchLocation = vm::fetchLocationByPlugin,
-                            onResolveAddress = vm::resolveLocationAddress,
+                            onResolveAddressIntl = vm::resolveLocationAddressIntl,
+                            onResolveAddressCn = vm::resolveLocationAddressCn,
                             modifier = Modifier.fillMaxSize()
                         )
                     }

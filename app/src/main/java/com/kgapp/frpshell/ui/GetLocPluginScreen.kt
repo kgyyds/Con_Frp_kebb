@@ -21,6 +21,7 @@ fun GetLocPluginScreen(
     contentPadding: PaddingValues,
     loading: Boolean,
     errorMessage: String?,
+    statusMessage: String?,
     locationInfo: LocationInfo?,
     intlAddressLoading: Boolean,
     intlAddress: String?,
@@ -28,6 +29,9 @@ fun GetLocPluginScreen(
     cnAddressLoading: Boolean,
     cnAddress: String?,
     cnAddressErrorMessage: String?,
+    onInstallPlugin: () -> Unit,
+    onUninstallPlugin: () -> Unit,
+    onGrantPermission: () -> Unit,
     onFetchLocation: () -> Unit,
     onResolveAddressIntl: () -> Unit,
     onResolveAddressCn: () -> Unit,
@@ -42,12 +46,28 @@ fun GetLocPluginScreen(
     ) {
         Text("GetLoc 插件", style = MaterialTheme.typography.titleLarge)
 
+        Button(onClick = onInstallPlugin, modifier = Modifier.fillMaxWidth()) {
+            Text("安装GetLoc")
+        }
+
+        Button(onClick = onUninstallPlugin, modifier = Modifier.fillMaxWidth()) {
+            Text("卸载GetLoc")
+        }
+
+        Button(onClick = onGrantPermission, modifier = Modifier.fillMaxWidth()) {
+            Text("权限设置")
+        }
+
         Button(onClick = onFetchLocation, modifier = Modifier.fillMaxWidth()) {
             Text("获取位置")
         }
 
         if (loading) {
             CircularProgressIndicator()
+        }
+
+        statusMessage?.let {
+            Text(it, color = MaterialTheme.colorScheme.primary)
         }
 
         errorMessage?.let {

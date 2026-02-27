@@ -117,6 +117,7 @@ data class MainUiState(
     val contactItems: List<ContactItem> = emptyList(),
     val getLocLoading: Boolean = false,
     val getLocErrorMessage: String? = null,
+    val getLocStatusMessage: String? = null,
     val locationInfo: LocationInfo? = null,
     val locationAddressIntlLoading: Boolean = false,
     val locationAddressIntl: String? = null,

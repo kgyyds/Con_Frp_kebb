@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,7 +28,7 @@ fun PerformanceScreen(
     contentPadding: PaddingValues,
     onOpenRunningPrograms: () -> Unit,
     onShowDeviceInfo: () -> Unit,
-    onShowAppList: () -> Unit,
+    onShowCallLog: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -46,11 +46,11 @@ fun PerformanceScreen(
             Button(onClick = onShowDeviceInfo, modifier = Modifier.fillMaxWidth()) {
                 Text("应用信息")
             }
-            Button(onClick = onShowAppList, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onShowCallLog, modifier = Modifier.fillMaxWidth()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Apps, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("应用列表")
+                    Text("读取通话记录")
                 }
             }
         }

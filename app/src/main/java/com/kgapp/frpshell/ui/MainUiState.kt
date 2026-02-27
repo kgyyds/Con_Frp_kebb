@@ -17,8 +17,15 @@ enum class ScreenDestination {
     Main,
     Settings,
     DeviceInfo,
-    AppList
+    CallLog
 }
+
+data class CallLogItem(
+    val number: String,
+    val date: Long,
+    val duration: Long,
+    val type: Int
+)
 
 data class MainUiState(
     val selectedTarget: ShellTarget = ShellTarget.FrpLog,
@@ -77,12 +84,11 @@ data class MainUiState(
     val deviceInfoLoading: Boolean = false,
     val deviceInfoErrorMessage: String? = null,
     val deviceInfoCards: List<DeviceInfoCard> = emptyList(),
-    val appListVisible: Boolean = false,
-    val appListLoading: Boolean = false,
-    val appListLoadingText: String = "正在获取应用列表...",
-    val appListItems: List<AppInfo> = emptyList(),
-    val appListErrorMessage: String? = null,
-    val appListClientId: String? = null,
+    val callLogClientId: String? = null,
+    val callLogLoading: Boolean = false,
+    val callLogErrorMessage: String? = null,
+    val callLogCountInput: String = "5",
+    val callLogItems: List<CallLogItem> = emptyList(),
     val clientModels: Map<String, ClientDisplayInfo> = emptyMap(),
     val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap()
 )

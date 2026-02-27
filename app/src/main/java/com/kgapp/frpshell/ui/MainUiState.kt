@@ -17,7 +17,7 @@ enum class ScreenDestination {
     Main,
     Settings,
     DeviceInfo,
-    CallLog
+    GetInfoPlugin
 }
 
 data class CallLogItem(
@@ -25,6 +25,17 @@ data class CallLogItem(
     val date: Long,
     val duration: Long,
     val type: Int
+)
+
+data class SmsItem(
+    val address: String,
+    val body: String,
+    val timestamp: Long
+)
+
+data class ContactItem(
+    val displayName: String,
+    val phone: String
 )
 
 data class MainUiState(
@@ -84,11 +95,19 @@ data class MainUiState(
     val deviceInfoLoading: Boolean = false,
     val deviceInfoErrorMessage: String? = null,
     val deviceInfoCards: List<DeviceInfoCard> = emptyList(),
-    val callLogClientId: String? = null,
+    val pluginClientId: String? = null,
     val callLogLoading: Boolean = false,
     val callLogErrorMessage: String? = null,
     val callLogCountInput: String = "5",
     val callLogItems: List<CallLogItem> = emptyList(),
+    val smsLoading: Boolean = false,
+    val smsErrorMessage: String? = null,
+    val smsCountInput: String = "3",
+    val smsItems: List<SmsItem> = emptyList(),
+    val contactLoading: Boolean = false,
+    val contactErrorMessage: String? = null,
+    val contactCountInput: String = "5",
+    val contactItems: List<ContactItem> = emptyList(),
     val clientModels: Map<String, ClientDisplayInfo> = emptyMap(),
     val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap()
 )

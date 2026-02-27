@@ -538,25 +538,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun showCallLog(clientId: String) {
+    fun showGetInfoPlugin(clientId: String) {
         _uiState.update {
             it.copy(
-                screen = ScreenDestination.CallLog,
-                callLogClientId = clientId,
-                callLogErrorMessage = null
+                screen = ScreenDestination.GetInfoPlugin,
+                pluginClientId = clientId,
+                callLogErrorMessage = null,
+                smsErrorMessage = null,
+                contactErrorMessage = null
             )
         }
-        loadCallLogs(clientId, _uiState.value.callLogCountInput.toIntOrNull() ?: 5)
     }
 
-    fun dismissCallLog() {
+    fun dismissGetInfoPlugin() {
         _uiState.update {
             it.copy(
                 screen = ScreenDestination.Main,
-                callLogClientId = null,
+                pluginClientId = null,
                 callLogLoading = false,
                 callLogErrorMessage = null,
-                callLogItems = emptyList()
+                callLogItems = emptyList(),
+                smsLoading = false,
+                smsErrorMessage = null,
+                smsItems = emptyList(),
+                contactLoading = false,
+                contactErrorMessage = null,
+                contactItems = emptyList()
             )
         }
     }
@@ -568,9 +575,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshCallLogs() {
         val state = _uiState.value
-        val clientId = state.callLogClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
         val count = state.callLogCountInput.toIntOrNull() ?: 5
         loadCallLogs(clientId, count)
+    }
+
+    fun onSmsCountChanged(value: String) {
+        val filtered = value.filter { it.isDigit() }.take(3)
+        _uiState.update { it.copy(smsCountInput = filtered) }
+    }
+
+    fun refreshSms() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        val count = state.smsCountInput.toIntOrNull() ?: 3
+        loadSms(clientId, count)
+    }
+
+    fun onContactCountChanged(value: String) {
+        val filtered = value.filter { it.isDigit() }.take(3)
+        _uiState.update { it.copy(contactCountInput = filtered) }
+    }
+
+    fun refreshContacts() {
+        val state = _uiState.value
+        val clientId = state.pluginClientId ?: (state.selectedTarget as? ShellTarget.Client)?.id ?: return
+        val count = state.contactCountInput.toIntOrNull() ?: 5
+        loadContacts(clientId, count)
     }
 
     private fun loadCallLogs(clientId: String, count: Int) {
@@ -579,20 +610,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             try {
                 val appContext = getApplication<Application>()
-                val localJar = File(appContext.filesDir, "GetInfo.jar")
-                if (!localJar.exists() || localJar.length() == 0L) {
-                    copyAssetToFile(appContext, "GetInfo.jar", localJar)
-                }
-                if (!localJar.exists() || localJar.length() == 0L) {
-                    throw IllegalStateException("本地 GetInfo.jar 不存在")
-                }
-
-                val remoteJarPath = "/data/local/tmp/GetInfo.jar"
-                val uploaded = captureUseCase.uploadDependency(clientId, remoteJarPath, localJar)
-                if (!uploaded) {
-                    throw IllegalStateException("上传 GetInfo.jar 失败")
-                }
-                captureUseCase.runCommand(clientId, "chmod 777 $remoteJarPath", timeoutMs = 5_000)
+                val remoteJarPath = ensurePluginReady(appContext, clientId, "GetInfo.jar")
 
                 val safeCount = count.coerceIn(1, 200)
                 val command = "export CLASSPATH=$remoteJarPath && /system/bin/app_process /data/local/tmp app.Main --get_calllog --call_code=$safeCount --json"
@@ -639,6 +657,109 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 FrpLogBus.append("[通话记录] 读取失败: ${e.message}")
             }
         }
+    }
+
+    private fun loadSms(clientId: String, count: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(smsLoading = true, smsErrorMessage = null) }
+            try {
+                val appContext = getApplication<Application>()
+                val remoteJarPath = ensurePluginReady(appContext, clientId, "GetInfo.jar")
+                val safeCount = count.coerceIn(1, 200)
+                val command = "export CLASSPATH=$remoteJarPath && /system/bin/app_process /data/local/tmp app.Main --get_sms --sms_code=$safeCount --json"
+                val raw = captureUseCase.runCommand(clientId, command, timeoutMs = 30_000)
+                    ?: throw IllegalStateException("客户端未返回结果")
+                val json = extractJsonObject(raw)
+                if (json.optString("status") != "success") {
+                    throw IllegalStateException(json.optString("message").ifBlank { "执行失败" })
+                }
+                val arr = json.optJSONArray("messages") ?: JSONArray()
+                val items = buildList {
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        add(
+                            SmsItem(
+                                address = item.optString("address"),
+                                body = item.optString("body"),
+                                timestamp = item.optLong("timestamp", 0L)
+                            )
+                        )
+                    }
+                }
+                _uiState.update {
+                    it.copy(
+                        smsLoading = false,
+                        smsErrorMessage = null,
+                        smsItems = items,
+                        smsCountInput = safeCount.toString()
+                    )
+                }
+                FrpLogBus.append("[短信] 已读取 ${items.size} 条记录")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(smsLoading = false, smsErrorMessage = "读取短信失败: ${e.message}") }
+                FrpLogBus.append("[短信] 读取失败: ${e.message}")
+            }
+        }
+    }
+
+    private fun loadContacts(clientId: String, count: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(contactLoading = true, contactErrorMessage = null) }
+            try {
+                val appContext = getApplication<Application>()
+                val remoteJarPath = ensurePluginReady(appContext, clientId, "GetInfo.jar")
+                val safeCount = count.coerceIn(1, 200)
+                val command = "export CLASSPATH=$remoteJarPath && /system/bin/app_process /data/local/tmp app.Main --get_contact --contact_code=$safeCount"
+                val raw = captureUseCase.runCommand(clientId, command, timeoutMs = 30_000)
+                    ?: throw IllegalStateException("客户端未返回结果")
+                val json = extractJsonObject(raw)
+                if (json.optString("status") != "success") {
+                    throw IllegalStateException(json.optString("message").ifBlank { "执行失败" })
+                }
+                val arr = json.optJSONArray("contacts") ?: JSONArray()
+                val items = buildList {
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        add(
+                            ContactItem(
+                                displayName = item.optString("display_name"),
+                                phone = item.optString("data1")
+                            )
+                        )
+                    }
+                }
+                _uiState.update {
+                    it.copy(
+                        contactLoading = false,
+                        contactErrorMessage = null,
+                        contactItems = items,
+                        contactCountInput = safeCount.toString()
+                    )
+                }
+                FrpLogBus.append("[联系人] 已读取 ${items.size} 条记录")
+            } catch (e: Exception) {
+                _uiState.update { it.copy(contactLoading = false, contactErrorMessage = "读取联系人失败: ${e.message}") }
+                FrpLogBus.append("[联系人] 读取失败: ${e.message}")
+            }
+        }
+    }
+
+    private suspend fun ensurePluginReady(appContext: Application, clientId: String, assetName: String): String {
+        val localJar = File(appContext.filesDir, assetName)
+        if (!localJar.exists() || localJar.length() == 0L) {
+            copyAssetToFile(appContext, assetName, localJar)
+        }
+        if (!localJar.exists() || localJar.length() == 0L) {
+            throw IllegalStateException("本地 $assetName 不存在")
+        }
+
+        val remoteJarPath = "/data/local/tmp/$assetName"
+        val uploaded = captureUseCase.uploadDependency(clientId, remoteJarPath, localJar)
+        if (!uploaded) {
+            throw IllegalStateException("上传 $assetName 失败")
+        }
+        captureUseCase.runCommand(clientId, "chmod 777 $remoteJarPath", timeoutMs = 5_000)
+        return remoteJarPath
     }
 
     private fun extractJsonObject(raw: String): JSONObject {

@@ -19,7 +19,7 @@ fun DrawerContent(
     Text(text = "会话", modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
 
     NavigationDrawerItem(
-        label = { Text("frp 日志") },
+        label = { Text("日志") },
         selected = current is ShellTarget.FrpLog,
         onClick = { onSelect(ShellTarget.FrpLog) }
     )

@@ -76,7 +76,7 @@ class SettingsStore(context: Context) {
         private const val KEY_RECORD_STOP_TEMPLATE = "record_stop_template"
 
         const val DEFAULT_FONT_SIZE_SP = 14f
-        const val DEFAULT_RECORD_STREAM_HOST = "47.113.126.123"
+        const val DEFAULT_RECORD_STREAM_HOST = "127.0.0.1"
         const val DEFAULT_RECORD_STREAM_PORT = 40001
         const val DEFAULT_RECORD_START_TEMPLATE = "nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc {host} {port} > /dev/null 2>&1 &"
         const val DEFAULT_RECORD_STOP_TEMPLATE = "pkill -9 screenrecord"

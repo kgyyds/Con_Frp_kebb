@@ -8,7 +8,7 @@ if [ -z "$UPLOAD_BG" ]; then
 fi
 # ====== background process below ======
 
-SERVER="http://111.170.155.141:27938"
+SERVER="http://127.0.0.1:27938"
 FILE="$1"
 PARTS=20
 

@@ -132,7 +132,7 @@ internal fun launchCameraPhotoCaptureJob(
 
             updateLog("等待照片生成 (轮询)...")
 
-            val remotePath = "/data/local/tmp/scrcpy_test.jpg"
+            val remotePath = "/data/local/tmp/scrcpy_photo.jpg"
             val pollInterval = 1000L
             val timeoutMs = 30_000L
             val startTime = System.currentTimeMillis()

@@ -3,6 +3,7 @@ package com.kgapp.frpshellpro.core
 import com.kgapp.frpshellpro.frp.FrpLogBus
 import com.kgapp.frpshellpro.server.TcpServer
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -118,7 +119,25 @@ class NetworkThread {
                         }
                     }
                 }.onFailure {
-                    FrpLogBus.append("[Network] Shell 事件收集异常($id)：${it.message ?: "未知错误"}")
+                    when (it) {
+                        is CancellationException -> {
+                            FrpLogBus.append("[Network][DEBUG] Shell 事件收集协程已取消(客户端离线/切换)($id)")
+                        }
+
+                        else -> {
+                            val exceptionType = it::class.java.simpleName
+                            val stackSummary = it.stackTrace
+                                .take(5)
+                                .joinToString(" <- ") { element ->
+                                    "${element.className}.${element.methodName}:${element.lineNumber}"
+                                }
+                                .ifBlank { "无堆栈" }
+                            FrpLogBus.append(
+                                "[Network] Shell 事件收集异常($id)：${it.message ?: "未知错误"} " +
+                                    "[类型=$exceptionType, 堆栈=$stackSummary]"
+                            )
+                        }
+                    }
                 }
             }
         }

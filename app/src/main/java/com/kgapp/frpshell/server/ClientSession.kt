@@ -1,5 +1,6 @@
 package com.kgapp.frpshellpro.server
 
+import com.kgapp.frpshellpro.frp.FrpLogBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,7 +34,7 @@ class ClientSession(
     val id: String,
     private val socket: Socket,
     private val scope: CoroutineScope,
-    private val onClosed: (String) -> Unit,
+    private val onClosed: (String, String) -> Unit,
     private val maxBinaryFrameSize: Int = DEFAULT_MAX_BINARY_FRAME_SIZE
 ) {
     private val _output = MutableStateFlow("")
@@ -48,6 +49,8 @@ class ClientSession(
 
     private val closed = AtomicBoolean(false)
     private val ioMutex = Mutex()
+    @Volatile
+    private var closeReason: String = "unspecified"
 
     private var recvJob: Job? = null
 
@@ -100,18 +103,20 @@ class ClientSession(
         return ioMutex.withLock {
             lastTransferError = null
             val total = localFile.length()
-            withSocketTimeout(FILE_TRANSFER_TIMEOUT_MS) {
+            val context = OperationContext("uploadFile", safeRemotePath.take(80), FILE_TRANSFER_TIMEOUT_MS)
+            withSocketTimeout(FILE_TRANSFER_TIMEOUT_MS, context) {
                 sendJson(
                     JSONObject()
                         .put("type", "uploadfile")
-                        .put("path", safeRemotePath)
+                        .put("path", safeRemotePath),
+                    context
                 )
 
                 localFile.inputStream().use { fileInput ->
                     sendBinary(fileInput, total) { done -> onProgress?.invoke(done, total) }
                 }
 
-                val response = readJsonFrame() ?: return@withSocketTimeout false
+                val response = readJsonFrame(context) ?: return@withSocketTimeout false
                 if (response.optString("type") != "uploadfile") {
                     reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, "upload response type mismatch")
                     return@withSocketTimeout false
@@ -129,14 +134,16 @@ class ClientSession(
 
         return ioMutex.withLock {
             lastTransferError = null
-            withSocketTimeout(FILE_TRANSFER_TIMEOUT_MS) {
+            val context = OperationContext("downloadFile", safeRemotePath.take(80), FILE_TRANSFER_TIMEOUT_MS)
+            withSocketTimeout(FILE_TRANSFER_TIMEOUT_MS, context) {
                 sendJson(
                     JSONObject()
                         .put("type", "downloadfile")
-                        .put("path", safeRemotePath)
+                        .put("path", safeRemotePath),
+                    context
                 )
 
-                val response = readJsonFrame() ?: return@withSocketTimeout DownloadResult.Failed
+                val response = readJsonFrame(context) ?: return@withSocketTimeout DownloadResult.Failed
                 if (response.optString("type") != "downloadfile") {
                     return@withSocketTimeout DownloadResult.Failed
                 }
@@ -150,7 +157,7 @@ class ClientSession(
                     }
                 }
 
-                val header = readFrameHeader() ?: return@withSocketTimeout DownloadResult.Failed
+                val header = readFrameHeader(contextFromJson("download.readFrameHeader", JSONObject().put("type", "downloadfile").put("path", safeRemotePath))) ?: return@withSocketTimeout DownloadResult.Failed
                 if (header.type != TYPE_BINARY) {
                     reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, "download expected binary frame, got ${header.type}")
                     skipBytes(header.length)
@@ -174,14 +181,16 @@ class ClientSession(
         val safePath = sanitizeRemotePath(path) ?: return ListFilesResult.Failed("invalid path")
 
         return ioMutex.withLock {
-            withSocketTimeout(DEFAULT_MANAGED_TIMEOUT_MS) {
+            val context = OperationContext("listFiles", safePath.take(80), DEFAULT_MANAGED_TIMEOUT_MS)
+            withSocketTimeout(DEFAULT_MANAGED_TIMEOUT_MS, context) {
                 sendJson(
                     JSONObject()
                         .put("type", "file")
-                        .put("path", safePath)
+                        .put("path", safePath),
+                    context
                 )
 
-                val response = readJsonFrame() ?: return@withSocketTimeout ListFilesResult.Failed("invalid response")
+                val response = readJsonFrame(context) ?: return@withSocketTimeout ListFilesResult.Failed("invalid response")
                 if (response.optString("type") != "file") {
                     return@withSocketTimeout ListFilesResult.Failed("invalid response")
                 }
@@ -197,25 +206,35 @@ class ClientSession(
         }
     }
 
-    fun close() {
+    fun close(reason: String = "manual close", cause: Throwable? = null) {
         if (!closed.compareAndSet(false, true)) return
+        val causeDetail = cause?.let { " (${it::class.java.simpleName}: ${it.message ?: "no message"})" } ?: ""
+        closeReason = "$reason$causeDetail"
+        logWarn("[ClientSession] closing id=$id reason=$closeReason")
         runCatching { socket.close() }
         recvJob?.cancel()
         scope.cancel()
-        onClosed(id)
+        onClosed(id, closeReason)
     }
 
     private suspend fun executeExec(command: String, timeoutMs: Long): ExecResult {
+        val context = OperationContext(
+            operation = "executeExec",
+            commandSummary = command.take(80),
+            timeoutMs = timeoutMs
+        )
         return ioMutex.withLock {
-            withSocketTimeout(timeoutMs) {
+            withSocketTimeout(timeoutMs, context) {
                 sendJson(
                     JSONObject()
                         .put("type", "exec")
-                        .put("cmd", command)
+                        .put("cmd", command),
+                    context
                 )
 
-                val response = readJsonFrame()
+                val response = readJsonFrame(context)
                 if (response == null || response.optString("type") != "exec") {
+                    logWarn("[ClientSession] executeExec invalid response ${context.describe(socket)}")
                     return@withSocketTimeout ExecResult(error = "invalid response")
                 }
 
@@ -225,14 +244,18 @@ class ClientSession(
                 }
 
                 ExecResult(output = response.optString("output"))
-            } ?: ExecResult(error = "command timeout")
+            } ?: run {
+                logWarn("[ClientSession] executeExec timeout ${context.describe(socket)}")
+                ExecResult(error = "command timeout")
+            }
         }
     }
 
     private suspend fun receiveRegistration() {
         val info = ioMutex.withLock {
-            withSocketTimeout(REGISTRATION_TIMEOUT_MS) {
-                val json = readJsonFrame() ?: return@withSocketTimeout null
+            val context = OperationContext("receiveRegistration", "register", REGISTRATION_TIMEOUT_MS)
+            withSocketTimeout(REGISTRATION_TIMEOUT_MS, context) {
+                val json = readJsonFrame(context) ?: return@withSocketTimeout null
                 if (json.optString("type") != "register") return@withSocketTimeout null
                 RegistrationInfo(
                     deviceName = json.optString("device_name", id),
@@ -248,13 +271,18 @@ class ClientSession(
         }
     }
 
-    private fun sendJson(json: JSONObject) {
+    private fun sendJson(json: JSONObject, context: OperationContext? = null) {
+        val resolvedContext = context ?: contextFromJson("sendJson", json)
         val payload = json.toString().toByteArray(StandardCharsets.UTF_8)
-        writeFrame(TYPE_JSON, payload)
+        runCatching { writeFrame(TYPE_JSON, payload, resolvedContext) }
+            .onFailure {
+                logError("[ClientSession] sendJson failed ${resolvedContext.describe(socket)}", it)
+                throw it
+            }
     }
 
     private fun sendBinary(payload: ByteArray) {
-        writeFrame(TYPE_BINARY, payload)
+        writeFrame(TYPE_BINARY, payload, context = null)
     }
 
     private fun sendBinary(input: InputStream, length: Long, onProgress: ((Long) -> Unit)? = null) {
@@ -282,16 +310,21 @@ class ClientSession(
         outputStream.flush()
     }
 
-    private fun writeFrame(type: Int, payload: ByteArray) {
+    private fun writeFrame(type: Int, payload: ByteArray, context: OperationContext? = null) {
         require(payload.size <= Int.MAX_VALUE)
-        outputStream.writeInt(payload.size)
-        outputStream.writeByte(type)
-        outputStream.write(payload)
-        outputStream.flush()
+        runCatching {
+            outputStream.writeInt(payload.size)
+            outputStream.writeByte(type)
+            outputStream.write(payload)
+            outputStream.flush()
+        }.onFailure {
+            logError("[ClientSession] writeFrame failed type=$type ${context.describe(socket)}", it)
+            throw it
+        }
     }
 
-    private fun readJsonFrame(): JSONObject? {
-        val header = readFrameHeader() ?: return null
+    private fun readJsonFrame(context: OperationContext? = null): JSONObject? {
+        val header = readFrameHeader(context) ?: return null
         if (header.type != TYPE_JSON) {
             reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, "expected json frame, got ${header.type}")
             skipBytes(header.length)
@@ -302,11 +335,12 @@ class ClientSession(
             input.readFully(payload)
             JSONObject(String(payload, StandardCharsets.UTF_8))
         }.onFailure {
+            logError("[ClientSession] readJsonFrame payload failed ${context.describe(socket)}", it)
             reportTransferError(TransferErrorCode.IO_INTERRUPTED, "read json payload failed: ${it.message}")
         }.getOrNull()
     }
 
-    private fun readFrameHeader(): FrameHeader? {
+    private fun readFrameHeader(context: OperationContext? = null): FrameHeader? {
         return try {
             val length = input.readInt()
             if (length < 0) {
@@ -320,13 +354,14 @@ class ClientSession(
                 return null
             }
             FrameHeader(type = type, length = length)
-        } catch (_: SocketTimeoutException) {
+        } catch (e: SocketTimeoutException) {
+            close("readFrameHeader timeout ${e::class.java.simpleName}: ${e.message ?: "no message"} ${context.describe(socket)}", e)
             null
-        } catch (_: EOFException) {
-            close()
+        } catch (e: EOFException) {
+            close("readFrameHeader EOF ${e::class.java.simpleName}: ${e.message ?: "no message"} ${context.describe(socket)}", e)
             null
-        } catch (_: Exception) {
-            close()
+        } catch (e: Exception) {
+            close("readFrameHeader exception ${e::class.java.simpleName}: ${e.message ?: "no message"} ${context.describe(socket)}", e)
             null
         }
     }
@@ -365,19 +400,45 @@ class ClientSession(
         lastTransferError = TransferError(code, message)
         val text = "[$TRANSFER_LOG_TAG][${code.name}] $message"
         appendOutput(text)
-        Log.w(LOG_TAG, text)
+        logWarn(text)
     }
 
-    private fun <T> withSocketTimeout(timeoutMs: Long, block: () -> T): T? {
+    private fun <T> withSocketTimeout(timeoutMs: Long, context: OperationContext? = null, block: () -> T): T? {
         val previous = socket.soTimeout
         return try {
             socket.soTimeout = timeoutMs.toInt()
             block()
-        } catch (_: SocketTimeoutException) {
+        } catch (e: SocketTimeoutException) {
+            logWarn("[ClientSession] socket timeout ${context.describe(socket)}")
             null
         } finally {
             runCatching { socket.soTimeout = previous }
         }
+    }
+
+    private fun contextFromJson(operation: String, json: JSONObject): OperationContext {
+        val summary = when {
+            json.has("cmd") -> json.optString("cmd")
+            json.has("path") -> "${json.optString("type")}:${json.optString("path")}"
+            else -> json.optString("type", "unknown")
+        }.take(80)
+        return OperationContext(
+            operation = operation,
+            commandSummary = summary,
+            timeoutMs = socket.soTimeout.toLong()
+        )
+    }
+
+    private fun logWarn(message: String) {
+        FrpLogBus.append(message)
+        Log.w(LOG_TAG, message)
+    }
+
+    private fun logError(message: String, throwable: Throwable? = null) {
+        val detail = throwable?.let { " (${it::class.java.simpleName}: ${it.message ?: "no message"})" } ?: ""
+        val text = "$message$detail"
+        FrpLogBus.append(text)
+        Log.e(LOG_TAG, text, throwable)
     }
 
     private fun appendOutput(line: String) {
@@ -414,9 +475,10 @@ class ClientSession(
 
     suspend fun requestDeviceInfo(timeoutMs: Long = 5000L): JSONObject? {
         return ioMutex.withLock {
-            withSocketTimeout(timeoutMs) {
-                sendJson(JSONObject().put("type", "info"))
-                val response = readJsonFrame()
+            val context = OperationContext("requestDeviceInfo", "info", timeoutMs)
+            withSocketTimeout(timeoutMs, context) {
+                sendJson(JSONObject().put("type", "info"), context)
+                val response = readJsonFrame(context)
                 if (response == null || response.optString("type") != "info") {
                     return@withSocketTimeout JSONObject().apply {
                         put("type", "info")
@@ -454,6 +516,19 @@ class ClientSession(
         val output: String? = null,
         val error: String? = null
     )
+
+    private data class OperationContext(
+        val operation: String,
+        val commandSummary: String,
+        val timeoutMs: Long
+    )
+
+    private fun OperationContext?.describe(socket: Socket): String {
+        if (this == null) {
+            return "operation=unknown cmd=- timeoutMs=${socket.soTimeout} remote=${socket.remoteSocketAddress}"
+        }
+        return "operation=$operation cmd=${commandSummary.ifBlank { "-" }} timeoutMs=$timeoutMs remote=${socket.remoteSocketAddress}"
+    }
 
     sealed interface ShellEvent {
         data class OutputLine(val line: String) : ShellEvent

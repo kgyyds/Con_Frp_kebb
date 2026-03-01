@@ -1,5 +1,6 @@
 package com.kgapp.frpshellpro.server
 
+import android.util.Log
 import com.kgapp.frpshellpro.frp.FrpLogBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,7 +32,7 @@ object TcpServer {
 
     fun start(port: Int) {
         if (listeningPort == port && serverSocket != null) {
-            FrpLogBus.append("[TCP] 监听器已在端口 $port 运行")
+            logWarn("[TCP] 监听器已在端口 $port 运行")
             return
         }
 
@@ -45,7 +46,7 @@ object TcpServer {
             runCatching {
                 ServerSocket(port).use { server ->
                     serverSocket = server
-                    FrpLogBus.append("[TCP] 已开始监听 127.0.0.1:$port")
+                    logWarn("[TCP] 已开始监听 127.0.0.1:$port")
                     while (true) {
                         val socket = server.accept()
                         val id = "${socket.inetAddress.hostAddress}:${socket.port}"
@@ -58,13 +59,13 @@ object TcpServer {
                         )
                         sessions[id] = session
                         _clientIds.value = sessions.keys.sorted()
-                        FrpLogBus.append("[TCP] 客户端已连接：$id")
+                        logWarn("[TCP] 客户端已连接：$id")
                         session.start()
                     }
                 }
             }.onFailure { error ->
                 if (error !is SocketException) {
-                    FrpLogBus.append("[TCP] 监听器停止：${error.message ?: "未知错误"}")
+                    logError("[TCP] 监听器停止：${error.message ?: "未知错误"}", error)
                 }
             }
         }
@@ -73,7 +74,7 @@ object TcpServer {
     fun getClient(id: String): ClientSession? = sessions[id]
 
     fun stopAll() {
-        sessions.values.toList().forEach { it.close() }
+        sessions.values.toList().forEach { it.close("server stopAll") }
         sessions.clear()
         _clientIds.value = emptyList()
 
@@ -85,11 +86,23 @@ object TcpServer {
         listeningPort = null
     }
 
-    private fun onSessionClosed(id: String) {
+    private fun onSessionClosed(id: String, reason: String) {
         val removed = sessions.remove(id)
         if (removed != null) {
             _clientIds.value = sessions.keys.sorted()
-            FrpLogBus.append("[TCP] 客户端已断开：$id")
+            logWarn("[TCP] 客户端已断开: $id, reason=$reason")
         }
     }
+    private fun logWarn(message: String) {
+        FrpLogBus.append(message)
+        Log.w(LOG_TAG, message)
+    }
+
+    private fun logError(message: String, throwable: Throwable? = null) {
+        FrpLogBus.append(message)
+        Log.e(LOG_TAG, message, throwable)
+    }
+
+    private const val LOG_TAG = "TcpServer"
+
 }

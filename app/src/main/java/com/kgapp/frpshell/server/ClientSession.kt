@@ -53,6 +53,8 @@ class ClientSession(
     private var closeReason: String = "unspecified"
 
     private var recvJob: Job? = null
+    @Volatile
+    private var lastProtocolReadFailure: ProtocolReadFailure? = null
 
     private val input by lazy { DataInputStream(BufferedInputStream(socket.getInputStream())) }
     private val outputStream by lazy { DataOutputStream(BufferedOutputStream(socket.getOutputStream())) }
@@ -70,8 +72,10 @@ class ClientSession(
             val result = executeExec(command, DEFAULT_MANAGED_TIMEOUT_MS)
             when {
                 result.error != null -> {
-                    appendOutput("[ERROR] ${result.error}")
-                    _shellEvents.tryEmit(ShellEvent.OutputLine("[ERROR] ${result.error}"))
+                    logWarn("[ClientSession][executeExec] user-facing error=${result.error} clientId=$id")
+                    val userReadable = userReadableExecError(result.error)
+                    appendOutput("[ERROR] $userReadable")
+                    _shellEvents.tryEmit(ShellEvent.OutputLine("[ERROR] $userReadable"))
                 }
 
                 !result.output.isNullOrEmpty() -> {
@@ -89,7 +93,7 @@ class ClientSession(
     suspend fun runManagedCommand(command: String, timeoutMs: Long = DEFAULT_MANAGED_TIMEOUT_MS): String? {
         if (command.isBlank()) return ""
         val result = executeExec(command, timeoutMs)
-        return result.output ?: result.error?.let { "[ERROR] $it" }
+        return result.output ?: result.error?.let { "[ERROR] ${userReadableExecError(it)}" }
     }
 
     suspend fun uploadFile(remotePath: String, localFile: File, onProgress: ((Long, Long) -> Unit)? = null): Boolean {
@@ -218,35 +222,60 @@ class ClientSession(
     }
 
     private suspend fun executeExec(command: String, timeoutMs: Long): ExecResult {
+        val commandSummary = command.take(80)
+        logWarn("[ClientSession][executeExec] stage=start clientId=$id cmd=$commandSummary timeoutMs=$timeoutMs socketState=${socketState()}")
         val context = OperationContext(
             operation = "executeExec",
-            commandSummary = command.take(80),
+            commandSummary = commandSummary,
             timeoutMs = timeoutMs
         )
         return ioMutex.withLock {
             withSocketTimeout(timeoutMs, context) {
+                lastProtocolReadFailure = null
                 sendJson(
                     JSONObject()
                         .put("type", "exec")
                         .put("cmd", command),
                     context
                 )
+                logWarn("[ClientSession][executeExec] stage=request sent clientId=$id ${context.describe(socket)} socketState=${socketState()}")
 
                 val response = readJsonFrame(context)
-                if (response == null || response.optString("type") != "exec") {
-                    logWarn("[ClientSession] executeExec invalid response ${context.describe(socket)}")
-                    return@withSocketTimeout ExecResult(error = "invalid response")
+                if (response == null) {
+                    val protocolFailure = lastProtocolReadFailure
+                    val errorCode = when (protocolFailure?.throwable) {
+                        is EOFException -> ExecErrorCode.EOF
+                        else -> ExecErrorCode.PROTOCOL_MISMATCH
+                    }
+                    if (protocolFailure != null) {
+                        logWarn(
+                            "[ClientSession][executeExec][${errorCode.tag}] stage=${protocolFailure.stage} " +
+                                "frameType=${protocolFailure.frameType?.toString() ?: "-"} frameLength=${protocolFailure.frameLength?.toString() ?: "-"} " +
+                                "socketState=${socketState()} ${context.describe(socket)}"
+                        )
+                    } else {
+                        logWarn("[ClientSession][executeExec][${errorCode.tag}] stage=read-json-null socketState=${socketState()} ${context.describe(socket)}")
+                    }
+                    return@withSocketTimeout ExecResult(error = formatExecError(errorCode, "invalid response"))
+                }
+                if (response.optString("type") != "exec") {
+                    logWarn(
+                        "[ClientSession][executeExec][ERR_PROTOCOL_MISMATCH] stage=type mismatch frameType=$TYPE_JSON frameLength=${response.toString().length} " +
+                            "socketState=${socketState()} ${context.describe(socket)}"
+                    )
+                    return@withSocketTimeout ExecResult(error = formatExecError(ExecErrorCode.PROTOCOL_MISMATCH, "invalid response"))
                 }
 
                 val error = response.optString("error")
                 if (error.isNotBlank()) {
+                    logWarn("[ClientSession][executeExec][ERR_REMOTE] stage=remote error=$error socketState=${socketState()} ${context.describe(socket)}")
                     return@withSocketTimeout ExecResult(error = error)
                 }
 
                 ExecResult(output = response.optString("output"))
             } ?: run {
-                logWarn("[ClientSession] executeExec timeout ${context.describe(socket)}")
-                ExecResult(error = "command timeout")
+                logWarn("[ClientSession][executeExec][ERR_TIMEOUT] stage=socket timeout socketState=${socketState()} ${context.describe(socket)}")
+                ExecResult(error = formatExecError(ExecErrorCode.TIMEOUT, "command timeout"))
             }
         }
     }
@@ -327,6 +356,11 @@ class ClientSession(
         val header = readFrameHeader(context) ?: return null
         if (header.type != TYPE_JSON) {
             reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, "expected json frame, got ${header.type}")
+            lastProtocolReadFailure = ProtocolReadFailure(
+                stage = "type mismatch",
+                frameType = header.type,
+                frameLength = header.length
+            )
             skipBytes(header.length)
             return null
         }
@@ -335,6 +369,12 @@ class ClientSession(
             input.readFully(payload)
             JSONObject(String(payload, StandardCharsets.UTF_8))
         }.onFailure {
+            lastProtocolReadFailure = ProtocolReadFailure(
+                stage = "json parse",
+                frameType = header.type,
+                frameLength = header.length,
+                throwable = it
+            )
             logError("[ClientSession] readJsonFrame payload failed ${context.describe(socket)}", it)
             reportTransferError(TransferErrorCode.IO_INTERRUPTED, "read json payload failed: ${it.message}")
         }.getOrNull()
@@ -344,25 +384,45 @@ class ClientSession(
         return try {
             val length = input.readInt()
             if (length < 0) {
+                lastProtocolReadFailure = ProtocolReadFailure(stage = "header", frameLength = length)
                 reportTransferError(TransferErrorCode.INVALID_LENGTH, "negative frame length: $length")
                 return null
             }
             val type = input.readUnsignedByte()
             val max = if (type == TYPE_JSON) MAX_JSON_FRAME_SIZE else maxBinaryFrameSize
             if (length > max) {
+                lastProtocolReadFailure = ProtocolReadFailure(stage = "header", frameType = type, frameLength = length)
                 reportTransferError(TransferErrorCode.INVALID_LENGTH, "frame length overflow, type=$type length=$length max=$max")
                 return null
             }
             FrameHeader(type = type, length = length)
         } catch (e: SocketTimeoutException) {
+            lastProtocolReadFailure = ProtocolReadFailure(stage = "header", throwable = e)
             close("readFrameHeader timeout ${e::class.java.simpleName}: ${e.message ?: "no message"} ${context.describe(socket)}", e)
             null
         } catch (e: EOFException) {
+            lastProtocolReadFailure = ProtocolReadFailure(stage = "header", throwable = e)
             close("readFrameHeader EOF ${e::class.java.simpleName}: ${e.message ?: "no message"} ${context.describe(socket)}", e)
             null
         } catch (e: Exception) {
+            lastProtocolReadFailure = ProtocolReadFailure(stage = "header", throwable = e)
             close("readFrameHeader exception ${e::class.java.simpleName}: ${e.message ?: "no message"} ${context.describe(socket)}", e)
             null
+        }
+    }
+
+    private fun socketState(): String {
+        return "closed=${socket.isClosed}, connected=${socket.isConnected}"
+    }
+
+    private fun formatExecError(code: ExecErrorCode, message: String): String = "${code.tag}: $message"
+
+    private fun userReadableExecError(error: String): String {
+        return when {
+            error.startsWith("${ExecErrorCode.TIMEOUT.tag}:") -> "命令执行超时"
+            error.startsWith("${ExecErrorCode.PROTOCOL_MISMATCH.tag}:") -> "远端响应异常"
+            error.startsWith("${ExecErrorCode.EOF.tag}:") -> "连接已中断"
+            else -> error
         }
     }
 
@@ -516,6 +576,19 @@ class ClientSession(
         val output: String? = null,
         val error: String? = null
     )
+
+    private data class ProtocolReadFailure(
+        val stage: String,
+        val frameType: Int? = null,
+        val frameLength: Int? = null,
+        val throwable: Throwable? = null
+    )
+
+    private enum class ExecErrorCode(val tag: String) {
+        TIMEOUT("ERR_TIMEOUT"),
+        PROTOCOL_MISMATCH("ERR_PROTOCOL_MISMATCH"),
+        EOF("ERR_EOF")
+    }
 
     private data class OperationContext(
         val operation: String,

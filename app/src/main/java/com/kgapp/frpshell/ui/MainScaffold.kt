@@ -381,6 +381,10 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             onStartFrp = vm::startFrp,
                             onStopFrp = vm::stopFrp,
                             onSend = vm::sendCommand,
+                            quickCommands = uiState.quickCommands,
+                            onAddQuickCommand = vm::addQuickCommand,
+                            onUpdateQuickCommand = vm::updateQuickCommand,
+                            onDeleteQuickCommand = vm::deleteQuickCommand,
                             contentPadding = padding
                         )
                     }

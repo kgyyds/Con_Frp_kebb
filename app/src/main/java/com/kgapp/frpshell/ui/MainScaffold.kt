@@ -383,6 +383,8 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             onSend = vm::sendCommand,
                             quickCommands = uiState.quickCommands,
                             onAddQuickCommand = vm::addQuickCommand,
+                            onUpdateQuickCommand = vm::updateQuickCommand,
+                            onDeleteQuickCommand = vm::deleteQuickCommand,
                             contentPadding = padding
                         )
                     }

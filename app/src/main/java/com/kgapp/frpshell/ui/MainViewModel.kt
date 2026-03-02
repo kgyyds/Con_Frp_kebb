@@ -1045,6 +1045,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
 
+    fun updateQuickCommand(oldAlias: String, newAlias: String, command: String) {
+        val oldAliasText = oldAlias.trim()
+        val newAliasText = newAlias.trim()
+        val commandText = command.trim()
+        if (oldAliasText.isBlank() || newAliasText.isBlank() || commandText.isBlank()) return
+
+        _uiState.update { state ->
+            val updated = state.quickCommands
+                .filterNot { it.alias == oldAliasText || (it.alias == newAliasText && oldAliasText != newAliasText) } +
+                QuickCommandItem(alias = newAliasText, command = commandText)
+            settingsStore.setQuickCommands(updated)
+            state.copy(quickCommands = updated)
+        }
+    }
+
+    fun deleteQuickCommand(alias: String) {
+        val aliasText = alias.trim()
+        if (aliasText.isBlank()) return
+
+        _uiState.update { state ->
+            val updated = state.quickCommands.filterNot { it.alias == aliasText }
+            settingsStore.setQuickCommands(updated)
+            state.copy(quickCommands = updated)
+        }
+    }
+
     fun openRunningPrograms() {
         val clientId = (_uiState.value.selectedTarget as? ShellTarget.Client)?.id ?: return
         _uiState.update {

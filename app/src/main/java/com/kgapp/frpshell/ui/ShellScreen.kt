@@ -1,5 +1,6 @@
 package com.kgapp.frpshellpro.ui
 
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,11 +19,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,14 +57,20 @@ fun ShellScreen(
     onSend: (String) -> Unit,
     quickCommands: List<QuickCommandItem>,
     onAddQuickCommand: (alias: String, command: String) -> Unit,
+    onUpdateQuickCommand: (oldAlias: String, newAlias: String, command: String) -> Unit,
+    onDeleteQuickCommand: (alias: String) -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier
 ) {
     var input by remember(target.id) { mutableStateOf("") }
     var showQuickMenu by remember(target.id) { mutableStateOf(false) }
+
     var showAddDialog by remember(target.id) { mutableStateOf(false) }
-    var newAlias by remember(target.id) { mutableStateOf("") }
-    var newCommand by remember(target.id) { mutableStateOf("") }
+    var dialogAlias by remember(target.id) { mutableStateOf("") }
+    var dialogCommand by remember(target.id) { mutableStateOf("") }
+
+    var actionTarget by remember(target.id) { mutableStateOf<QuickCommandItem?>(null) }
+    var editTarget by remember(target.id) { mutableStateOf<QuickCommandItem?>(null) }
 
     val frpLog by FrpLogBus.logs.collectAsState()
     val parsedBuffer = remember(target.id) { AnsiAnnotatedBuffer() }
@@ -102,8 +112,8 @@ fun ShellScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(onClick = onStartFrp, enabled = !frpRunning) { Text("启动 frp") }
-                Button(onClick = onStopFrp, enabled = frpRunning) { Text("停止 frp") }
+                androidx.compose.material3.Button(onClick = onStartFrp, enabled = !frpRunning) { Text("启动 frp") }
+                androidx.compose.material3.Button(onClick = onStopFrp, enabled = frpRunning) { Text("停止 frp") }
             }
         } else {
             LazyColumn(
@@ -114,17 +124,9 @@ fun ShellScreen(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 itemsIndexed(commandItems) { _, item ->
-                    Text(
-                        text = "$ ${item.commandText}",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = fontSizeSp.sp
-                    )
+                    Text(text = "$ ${item.commandText}", fontFamily = FontFamily.Monospace, fontSize = fontSizeSp.sp)
                     if (item.outputText.isNotBlank()) {
-                        Text(
-                            text = parsedBuffer.update(item.outputText),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = fontSizeSp.sp
-                        )
+                        Text(text = parsedBuffer.update(item.outputText), fontFamily = FontFamily.Monospace, fontSize = fontSizeSp.sp)
                     }
                     val statusHint = if (item.status == ShellCommandStatus.RUNNING) "执行中..." else "命令完成"
                     Text(
@@ -137,20 +139,26 @@ fun ShellScreen(
             }
 
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .imePadding(),
+                modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Box {
-                    Button(onClick = { showQuickMenu = true }) { Text("快捷") }
+                    IconButton(onClick = { showQuickMenu = true }) {
+                        Icon(imageVector = Icons.Filled.Bookmarks, contentDescription = "快捷命令")
+                    }
                     DropdownMenu(expanded = showQuickMenu, onDismissRequest = { showQuickMenu = false }) {
                         if (quickCommands.isEmpty()) {
                             DropdownMenuItem(text = { Text("暂无快捷命令") }, onClick = {})
                         } else {
                             quickCommands.forEach { quick ->
                                 DropdownMenuItem(
+                                    modifier = Modifier.combinedClickable(
+                                        onClick = {},
+                                        onLongClick = {
+                                            showQuickMenu = false
+                                            actionTarget = quick
+                                        }
+                                    ),
                                     text = { Text(quick.alias) },
                                     onClick = {
                                         input = quick.command
@@ -163,6 +171,8 @@ fun ShellScreen(
                         DropdownMenuItem(
                             text = { Text("+ 添加快捷命令") },
                             onClick = {
+                                dialogAlias = ""
+                                dialogCommand = ""
                                 showQuickMenu = false
                                 showAddDialog = true
                             }
@@ -178,12 +188,9 @@ fun ShellScreen(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { submit() }),
-                    textStyle = TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = fontSizeSp.sp
-                    )
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = fontSizeSp.sp)
                 )
-                Button(onClick = { submit() }) { Text("发送") }
+                androidx.compose.material3.Button(onClick = { submit() }) { Text("发送") }
             }
         }
     }
@@ -194,37 +201,66 @@ fun ShellScreen(
             title = { Text("添加快捷命令") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = newAlias,
-                        onValueChange = { newAlias = it },
-                        label = { Text("命令别名") },
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = newCommand,
-                        onValueChange = { newCommand = it },
-                        label = { Text("命令内容") },
-                        singleLine = true
-                    )
+                    OutlinedTextField(value = dialogAlias, onValueChange = { dialogAlias = it }, label = { Text("命令别名") }, singleLine = true)
+                    OutlinedTextField(value = dialogCommand, onValueChange = { dialogCommand = it }, label = { Text("命令内容") }, singleLine = true)
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    onAddQuickCommand(newAlias, newCommand)
-                    if (newAlias.isNotBlank() && newCommand.isNotBlank()) {
-                        newAlias = ""
-                        newCommand = ""
+                    onAddQuickCommand(dialogAlias, dialogCommand)
+                    if (dialogAlias.isNotBlank() && dialogCommand.isNotBlank()) {
                         showAddDialog = false
                     }
-                }) {
-                    Text("添加")
-                }
+                }) { Text("添加") }
+            },
+            dismissButton = { TextButton(onClick = { showAddDialog = false }) { Text("取消") } }
+        )
+    }
+
+    actionTarget?.let { targetQuick ->
+        AlertDialog(
+            onDismissRequest = { actionTarget = null },
+            title = { Text(targetQuick.alias) },
+            text = { Text("请选择操作") },
+            confirmButton = {
+                TextButton(onClick = {
+                    editTarget = targetQuick
+                    dialogAlias = targetQuick.alias
+                    dialogCommand = targetQuick.command
+                    actionTarget = null
+                }) { Text("修改") }
             },
             dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) {
-                    Text("取消")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        onDeleteQuickCommand(targetQuick.alias)
+                        actionTarget = null
+                    }) { Text("删除") }
+                    TextButton(onClick = { actionTarget = null }) { Text("取消") }
                 }
             }
+        )
+    }
+
+    editTarget?.let { targetQuick ->
+        AlertDialog(
+            onDismissRequest = { editTarget = null },
+            title = { Text("修改快捷命令") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = dialogAlias, onValueChange = { dialogAlias = it }, label = { Text("命令别名") }, singleLine = true)
+                    OutlinedTextField(value = dialogCommand, onValueChange = { dialogCommand = it }, label = { Text("命令内容") }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onUpdateQuickCommand(targetQuick.alias, dialogAlias, dialogCommand)
+                    if (dialogAlias.isNotBlank() && dialogCommand.isNotBlank()) {
+                        editTarget = null
+                    }
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { editTarget = null }) { Text("取消") } }
         )
     }
 }

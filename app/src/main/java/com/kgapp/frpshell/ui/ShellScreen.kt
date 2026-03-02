@@ -1,10 +1,11 @@
 package com.kgapp.frpshellpro.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -17,10 +18,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -29,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -45,10 +51,17 @@ fun ShellScreen(
     onStartFrp: () -> Unit,
     onStopFrp: () -> Unit,
     onSend: (String) -> Unit,
+    quickCommands: List<QuickCommandItem>,
+    onAddQuickCommand: (alias: String, command: String) -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier
 ) {
     var input by remember(target.id) { mutableStateOf("") }
+    var showQuickMenu by remember(target.id) { mutableStateOf(false) }
+    var showAddDialog by remember(target.id) { mutableStateOf(false) }
+    var newAlias by remember(target.id) { mutableStateOf("") }
+    var newCommand by remember(target.id) { mutableStateOf("") }
+
     val frpLog by FrpLogBus.logs.collectAsState()
     val parsedBuffer = remember(target.id) { AnsiAnnotatedBuffer() }
     val listState = rememberLazyListState()
@@ -130,6 +143,33 @@ fun ShellScreen(
                     .imePadding(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                Box {
+                    Button(onClick = { showQuickMenu = true }) { Text("快捷") }
+                    DropdownMenu(expanded = showQuickMenu, onDismissRequest = { showQuickMenu = false }) {
+                        if (quickCommands.isEmpty()) {
+                            DropdownMenuItem(text = { Text("暂无快捷命令") }, onClick = {})
+                        } else {
+                            quickCommands.forEach { quick ->
+                                DropdownMenuItem(
+                                    text = { Text(quick.alias) },
+                                    onClick = {
+                                        input = quick.command
+                                        showQuickMenu = false
+                                    }
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("+ 添加快捷命令") },
+                            onClick = {
+                                showQuickMenu = false
+                                showAddDialog = true
+                            }
+                        )
+                    }
+                }
+
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
@@ -138,7 +178,7 @@ fun ShellScreen(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { submit() }),
-                    textStyle = androidx.compose.ui.text.TextStyle(
+                    textStyle = TextStyle(
                         fontFamily = FontFamily.Monospace,
                         fontSize = fontSizeSp.sp
                     )
@@ -146,5 +186,45 @@ fun ShellScreen(
                 Button(onClick = { submit() }) { Text("发送") }
             }
         }
+    }
+
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            title = { Text("添加快捷命令") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = newAlias,
+                        onValueChange = { newAlias = it },
+                        label = { Text("命令别名") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = newCommand,
+                        onValueChange = { newCommand = it },
+                        label = { Text("命令内容") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onAddQuickCommand(newAlias, newCommand)
+                    if (newAlias.isNotBlank() && newCommand.isNotBlank()) {
+                        newAlias = ""
+                        newCommand = ""
+                        showAddDialog = false
+                    }
+                }) {
+                    Text("添加")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }

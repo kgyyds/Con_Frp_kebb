@@ -14,3 +14,8 @@ enum class ShellCommandStatus {
     RUNNING,
     DONE
 }
+
+data class QuickCommandItem(
+    val alias: String,
+    val command: String
+)

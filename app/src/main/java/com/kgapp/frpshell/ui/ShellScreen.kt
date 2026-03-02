@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -154,18 +156,27 @@ fun ShellScreen(
                         } else {
                             quickCommands.forEach { quick ->
                                 DropdownMenuItem(
-                                    modifier = Modifier.combinedClickable(
-                                        onClick = {},
-                                        onLongClick = {
-                                            showQuickMenu = false
-                                            actionTarget = quick
+                                    text = {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .fillMaxHeight()
+                                                .combinedClickable(
+                                                    onClick = {
+                                                        input = quick.command
+                                                        showQuickMenu = false
+                                                    },
+                                                    onLongClick = {
+                                                        showQuickMenu = false
+                                                        actionTarget = quick
+                                                    }
+                                                ),
+                                            contentAlignment = Alignment.CenterStart
+                                        ) {
+                                            Text(quick.alias)
                                         }
-                                    ),
-                                    text = { Text(quick.alias) },
-                                    onClick = {
-                                        input = quick.command
-                                        showQuickMenu = false
-                                    }
+                                    },
+                                    onClick = {}
                                 )
                             }
                         }

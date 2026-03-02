@@ -126,7 +126,8 @@ data class MainUiState(
     val locationAddressCn: String? = null,
     val locationAddressCnErrorMessage: String? = null,
     val clientModels: Map<String, ClientDisplayInfo> = emptyMap(),
-    val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap()
+    val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap(),
+    val quickCommands: List<QuickCommandItem> = emptyList()
 )
 
 data class ClientDisplayInfo(

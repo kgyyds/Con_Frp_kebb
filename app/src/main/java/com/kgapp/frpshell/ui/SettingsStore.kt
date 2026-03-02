@@ -35,6 +35,36 @@ class SettingsStore(context: Context) {
 
     fun getUploadScriptContent(): String = prefs.getString(KEY_UPLOAD_SCRIPT_CONTENT, "") ?: ""
 
+    fun getQuickCommands(): List<QuickCommandItem> {
+        val raw = prefs.getString(KEY_QUICK_COMMANDS, "[]") ?: "[]"
+        return runCatching {
+            val array = org.json.JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val obj = array.optJSONObject(index) ?: continue
+                    val alias = obj.optString("alias").trim()
+                    val command = obj.optString("command").trim()
+                    if (alias.isNotBlank() && command.isNotBlank()) {
+                        add(QuickCommandItem(alias = alias, command = command))
+                    }
+                }
+            }
+        }.getOrElse { emptyList() }
+    }
+
+    fun setQuickCommands(items: List<QuickCommandItem>) {
+        val array = org.json.JSONArray()
+        items.forEach { item ->
+            array.put(
+                org.json.JSONObject()
+                    .put("alias", item.alias)
+                    .put("command", item.command)
+            )
+        }
+        prefs.edit().putString(KEY_QUICK_COMMANDS, array.toString()).apply()
+    }
+
+
     fun setUploadScriptContent(value: String) {
         prefs.edit().putString(KEY_UPLOAD_SCRIPT_CONTENT, value).apply()
     }
@@ -70,6 +100,7 @@ class SettingsStore(context: Context) {
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_SHELL_FONT_SIZE_SP = "shell_font_size_sp"
         private const val KEY_UPLOAD_SCRIPT_CONTENT = "upload_script_content"
+        private const val KEY_QUICK_COMMANDS = "quick_commands"
         private const val KEY_RECORD_STREAM_HOST = "record_stream_host"
         private const val KEY_RECORD_STREAM_PORT = "record_stream_port"
         private const val KEY_RECORD_START_TEMPLATE = "record_start_template"

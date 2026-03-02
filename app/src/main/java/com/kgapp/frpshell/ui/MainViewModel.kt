@@ -196,6 +196,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val themeMode = settingsStore.getThemeMode()
                 val shellFontSizeSp = settingsStore.getShellFontSizeSp().coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
                 val uploadScriptContent = loadUploadScriptContent()
+                val quickCommands = settingsStore.getQuickCommands()
                 val recordStreamHost = settingsStore.getRecordStreamHost()
                 val recordStreamPort = settingsStore.getRecordStreamPort()
                 val recordStartTemplate = settingsStore.getRecordStartTemplate()
@@ -227,6 +228,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         localPort = localPort,
                         shellFontSizeSp = shellFontSizeSp,
                         uploadScriptContent = uploadScriptContent,
+                        quickCommands = quickCommands,
                         recordStreamHost = recordStreamHost,
                         recordStreamPort = recordStreamPort,
                         recordStartTemplate = recordStartTemplate,
@@ -1025,6 +1027,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         appendShellEcho(target.id, text)
         shellSendChannel.trySend(ShellSendRequest(target.id, text))
+    }
+
+    fun addQuickCommand(alias: String, command: String) {
+        val aliasText = alias.trim()
+        val commandText = command.trim()
+        if (aliasText.isBlank() || commandText.isBlank()) return
+
+        _uiState.update { state ->
+            val updated = state.quickCommands.filterNot { it.alias == aliasText } + QuickCommandItem(
+                alias = aliasText,
+                command = commandText
+            )
+            settingsStore.setQuickCommands(updated)
+            state.copy(quickCommands = updated)
+        }
+    }
+
+
+    fun updateQuickCommand(oldAlias: String, newAlias: String, command: String) {
+        val oldAliasText = oldAlias.trim()
+        val newAliasText = newAlias.trim()
+        val commandText = command.trim()
+        if (oldAliasText.isBlank() || newAliasText.isBlank() || commandText.isBlank()) return
+
+        _uiState.update { state ->
+            val updated = state.quickCommands
+                .filterNot { it.alias == oldAliasText || (it.alias == newAliasText && oldAliasText != newAliasText) } +
+                QuickCommandItem(alias = newAliasText, command = commandText)
+            settingsStore.setQuickCommands(updated)
+            state.copy(quickCommands = updated)
+        }
+    }
+
+    fun deleteQuickCommand(alias: String) {
+        val aliasText = alias.trim()
+        if (aliasText.isBlank()) return
+
+        _uiState.update { state ->
+            val updated = state.quickCommands.filterNot { it.alias == aliasText }
+            settingsStore.setQuickCommands(updated)
+            state.copy(quickCommands = updated)
+        }
     }
 
     fun openRunningPrograms() {

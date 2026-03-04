@@ -102,6 +102,8 @@ dependencies {
     // Coil
     implementation("io.coil-kt:coil-compose:2.6.0")
 
+    implementation("org.java-websocket:Java-WebSocket:1.5.6")
+
     // Debug tools
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

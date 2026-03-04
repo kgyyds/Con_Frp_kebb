@@ -9,9 +9,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-import java.net.ServerSocket
-import java.net.SocketException
+import org.java_websocket.WebSocket
+import org.java_websocket.handshake.ClientHandshake
+import org.java_websocket.server.WebSocketServer
+import java.net.InetSocketAddress
+import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 
 object TcpServer {
@@ -25,49 +27,31 @@ object TcpServer {
     private var serverScope: CoroutineScope? = null
 
     @Volatile
-    private var serverSocket: ServerSocket? = null
+    private var wsServer: WsBridgeServer? = null
 
     @Volatile
     private var listeningPort: Int? = null
 
     fun start(port: Int) {
-        if (listeningPort == port && serverSocket != null) {
-            logWarn("[TCP] 监听器已在端口 $port 运行")
+        if (listeningPort == port && wsServer != null) {
+            logWarn("[WS] 监听器已在端口 $port 运行")
             return
         }
 
         stopAll()
 
         listeningPort = port
-        val newScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        serverScope = newScope
+        serverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-        newScope.launch {
-            runCatching {
-                ServerSocket(port).use { server ->
-                    serverSocket = server
-                    logWarn("[TCP] 已开始监听 127.0.0.1:$port")
-                    while (true) {
-                        val socket = server.accept()
-                        val id = "${socket.inetAddress.hostAddress}:${socket.port}"
-                        val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-                        val session = ClientSession(
-                            id = id,
-                            socket = socket,
-                            scope = sessionScope,
-                            onClosed = ::onSessionClosed
-                        )
-                        sessions[id] = session
-                        _clientIds.value = sessions.keys.sorted()
-                        logWarn("[TCP] 客户端已连接：$id")
-                        session.start()
-                    }
-                }
-            }.onFailure { error ->
-                if (error !is SocketException) {
-                    logError("[TCP] 监听器停止：${error.message ?: "未知错误"}", error)
-                }
+        runCatching {
+            WsBridgeServer(port).also {
+                wsServer = it
+                it.start()
             }
+            logWarn("[WS] 已开始监听 0.0.0.0:$port")
+        }.onFailure { error ->
+            logError("[WS] 启动失败：${error.message ?: "未知错误"}", error)
+            stopAll()
         }
     }
 
@@ -78,8 +62,8 @@ object TcpServer {
         sessions.clear()
         _clientIds.value = emptyList()
 
-        runCatching { serverSocket?.close() }
-        serverSocket = null
+        runCatching { wsServer?.stop() }
+        wsServer = null
 
         serverScope?.cancel()
         serverScope = null
@@ -90,9 +74,31 @@ object TcpServer {
         val removed = sessions.remove(id)
         if (removed != null) {
             _clientIds.value = sessions.keys.sorted()
-            logWarn("[TCP] 客户端已断开: $id, reason=$reason")
+            logWarn("[WS] 客户端已断开: $id, reason=$reason")
         }
     }
+
+    private fun bindClient(conn: WebSocket): ClientSession {
+        val id = conn.remoteSocketAddress?.let { "${it.address.hostAddress}:${it.port}" } ?: "unknown-${conn.hashCode()}"
+        val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val session = ClientSession(
+            id = id,
+            connection = conn,
+            scope = sessionScope,
+            onClosed = ::onSessionClosed
+        )
+        sessions[id] = session
+        _clientIds.value = sessions.keys.sorted()
+        logWarn("[WS] 客户端已连接：$id")
+        session.start()
+        return session
+    }
+
+    private fun resolveClient(conn: WebSocket): ClientSession? {
+        val id = conn.remoteSocketAddress?.let { "${it.address.hostAddress}:${it.port}" } ?: return null
+        return sessions[id]
+    }
+
     private fun logWarn(message: String) {
         FrpLogBus.append(message)
         Log.w(LOG_TAG, message)
@@ -103,6 +109,37 @@ object TcpServer {
         Log.e(LOG_TAG, message, throwable)
     }
 
-    private const val LOG_TAG = "TcpServer"
+    private class WsBridgeServer(port: Int) : WebSocketServer(InetSocketAddress("0.0.0.0", port)) {
+        override fun onOpen(conn: WebSocket, handshake: ClientHandshake) {
+            bindClient(conn)
+        }
 
+        override fun onClose(conn: WebSocket, code: Int, reason: String, remote: Boolean) {
+            resolveClient(conn)?.close("ws close code=$code reason=$reason")
+        }
+
+        override fun onMessage(conn: WebSocket, message: String) {
+            resolveClient(conn)?.onTextMessage(message)
+        }
+
+        override fun onMessage(conn: WebSocket, message: ByteBuffer) {
+            val bytes = ByteArray(message.remaining())
+            message.get(bytes)
+            resolveClient(conn)?.onBinaryMessage(bytes)
+        }
+
+        override fun onError(conn: WebSocket?, ex: Exception) {
+            if (conn == null) {
+                logError("[WS] 服务错误：${ex.message ?: "未知错误"}", ex)
+                return
+            }
+            resolveClient(conn)?.close("ws error", ex)
+        }
+
+        override fun onStart() {
+            connectionLostTimeout = 30
+        }
+    }
+
+    private const val LOG_TAG = "TcpServer"
 }

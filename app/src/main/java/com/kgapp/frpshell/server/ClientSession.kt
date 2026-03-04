@@ -146,14 +146,18 @@ class ClientSession(
 
         val items = result.lineSequence()
             .map { it.trimEnd() }
+            .map { it.trimStart() }
             .filter { it.isNotBlank() && !it.startsWith("total") && !it.startsWith("ls:") }
             .mapNotNull { line ->
                 val parts = line.split(Regex("\\s+"), limit = 9)
                 if (parts.size < 9) return@mapNotNull null
-                val name = parts[8].trimStart()
+                val permissions = parts[0]
+                val name = parts[8].trim()
                 if (name == "." || name == "..") return@mapNotNull null
+
+                val isDirectory = permissions.firstOrNull() == 'd'
                 val fullPath = if (safePath == "/") "/$name" else "$safePath/$name"
-                RemoteFileEntry(path = fullPath, file = !parts[0].startsWith("d"))
+                RemoteFileEntry(path = fullPath, file = !isDirectory)
             }
             .toList()
         return ListFilesResult.Success(items)

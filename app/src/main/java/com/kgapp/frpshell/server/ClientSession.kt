@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.selects.select
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -61,10 +62,6 @@ class ClientSession(
             runReadLoop()
         }
     }
-
-    fun onTextMessage(text: String) = Unit
-
-    fun onBinaryMessage(payload: ByteArray) = Unit
 
     fun send(command: String) {
         if (command.isBlank()) return
@@ -126,11 +123,7 @@ class ClientSession(
             if (!ensureOpen()) return@withLock DownloadResult.Failed
             runCatching {
                 sendMessage(TYPE_DOWNLOAD_REQ, safeRemotePath.toByteArray())
-                val shellHint = awaitShell(500)
-                if (shellHint?.contains("not found", ignoreCase = true) == true) {
-                    return@runCatching DownloadResult.NotFound
-                }
-                val payload = awaitFile(FILE_TRANSFER_TIMEOUT_MS) ?: return@runCatching DownloadResult.Failed
+                val payload = awaitDownloadPayload(FILE_TRANSFER_TIMEOUT_MS) ?: return@runCatching DownloadResult.Failed
 
                 targetFile.parentFile?.mkdirs()
                 val total = payload.size.toLong()
@@ -147,16 +140,17 @@ class ClientSession(
 
     suspend fun listFiles(path: String): ListFilesResult {
         val safePath = sanitizeRemotePath(path) ?: return ListFilesResult.Failed("invalid path")
-        val result = runManagedCommand("ls -la $safePath", DEFAULT_MANAGED_TIMEOUT_MS) ?: return ListFilesResult.Failed("empty response")
+        val result = runManagedCommand("ls -la ${shellEscape(safePath)}", DEFAULT_MANAGED_TIMEOUT_MS)
+            ?: return ListFilesResult.Failed("empty response")
         if (result.startsWith("[ERROR]")) return ListFilesResult.Error(result)
 
         val items = result.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() && !it.startsWith("total") }
+            .map { it.trimEnd() }
+            .filter { it.isNotBlank() && !it.startsWith("total") && !it.startsWith("ls:") }
             .mapNotNull { line ->
                 val parts = line.split(Regex("\\s+"), limit = 9)
                 if (parts.size < 9) return@mapNotNull null
-                val name = parts[8]
+                val name = parts[8].trimStart()
                 if (name == "." || name == "..") return@mapNotNull null
                 val fullPath = if (safePath == "/") "/$name" else "$safePath/$name"
                 RemoteFileEntry(path = fullPath, file = !parts[0].startsWith("d"))
@@ -189,6 +183,29 @@ class ClientSession(
     private suspend fun awaitShell(timeoutMs: Long): String? = withTimeoutOrNull(timeoutMs) { shellMessages.receive() }
 
     private suspend fun awaitFile(timeoutMs: Long): ByteArray? = withTimeoutOrNull(timeoutMs) { fileMessages.receive() }
+
+    private suspend fun awaitDownloadPayload(timeoutMs: Long): ByteArray? {
+        return withTimeoutOrNull(timeoutMs) {
+            while (ensureOpen()) {
+                val next = select<Any?> {
+                    fileMessages.onReceive { it }
+                    shellMessages.onReceive { it }
+                }
+
+                when (next) {
+                    is ByteArray -> return@withTimeoutOrNull next
+                    is String -> {
+                        if (next.contains("not found", ignoreCase = true)) {
+                            reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, next)
+                            return@withTimeoutOrNull null
+                        }
+                        logWarn("[ClientSession] download ignore shell message: $next")
+                    }
+                }
+            }
+            null
+        }
+    }
 
     private suspend fun sendMessage(type: Byte, payload: ByteArray) {
         writerMutex.withLock {
@@ -261,6 +278,8 @@ class ClientSession(
         if (path.any { it == '\n' || it == '\r' || it == '\u0000' }) return null
         return path
     }
+
+    private fun shellEscape(value: String): String = "'${value.replace("'", "'\\''")}'"
 
     private fun reportTransferError(code: TransferErrorCode, message: String) {
         lastTransferError = TransferError(code, message)

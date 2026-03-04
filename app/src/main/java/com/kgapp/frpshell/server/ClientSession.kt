@@ -123,12 +123,35 @@ class ClientSession(
             if (!ensureOpen()) return@withLock DownloadResult.Failed
             runCatching {
                 sendMessage(TYPE_DOWNLOAD_REQ, safeRemotePath.toByteArray())
-                val payload = awaitDownloadPayload(FILE_TRANSFER_TIMEOUT_MS) ?: return@runCatching DownloadResult.Failed
+
+                val chunks = mutableListOf<ByteArray>()
+                var total = 0L
+                onProgress?.invoke(0, -1)
+
+                while (ensureOpen()) {
+                    when (val frame = awaitDownloadFrame(DOWNLOAD_IDLE_TIMEOUT_MS)) {
+                        is DownloadFrame.FileChunk -> {
+                            chunks += frame.data
+                            total += frame.data.size
+                            onProgress?.invoke(total, -1)
+                        }
+
+                        is DownloadFrame.NotFound -> return@runCatching DownloadResult.NotFound
+                        DownloadFrame.IdleTimeout -> break
+                        DownloadFrame.IgnoredShell -> continue
+                        DownloadFrame.ConnectionClosed -> break
+                    }
+                }
+
+                if (total <= 0L) {
+                    reportTransferError(TransferErrorCode.TIMEOUT, "download got no file data")
+                    return@runCatching DownloadResult.Failed
+                }
 
                 targetFile.parentFile?.mkdirs()
-                val total = payload.size.toLong()
-                onProgress?.invoke(0, total)
-                targetFile.writeBytes(payload)
+                targetFile.outputStream().use { out ->
+                    chunks.forEach { out.write(it) }
+                }
                 onProgress?.invoke(total, total)
                 DownloadResult.Success
             }.getOrElse {
@@ -186,28 +209,27 @@ class ClientSession(
 
     private suspend fun awaitShell(timeoutMs: Long): String? = withTimeoutOrNull(timeoutMs) { shellMessages.receive() }
 
-    private suspend fun awaitFile(timeoutMs: Long): ByteArray? = withTimeoutOrNull(timeoutMs) { fileMessages.receive() }
+    private suspend fun awaitDownloadFrame(timeoutMs: Long): DownloadFrame {
+        val next = withTimeoutOrNull(timeoutMs) {
+            select<Any?> {
+                fileMessages.onReceive { it }
+                shellMessages.onReceive { it }
+            }
+        } ?: return DownloadFrame.IdleTimeout
 
-    private suspend fun awaitDownloadPayload(timeoutMs: Long): ByteArray? {
-        return withTimeoutOrNull(timeoutMs) {
-            while (ensureOpen()) {
-                val next = select<Any?> {
-                    fileMessages.onReceive { it }
-                    shellMessages.onReceive { it }
-                }
-
-                when (next) {
-                    is ByteArray -> return@withTimeoutOrNull next
-                    is String -> {
-                        if (next.contains("not found", ignoreCase = true)) {
-                            reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, next)
-                            return@withTimeoutOrNull null
-                        }
-                        logWarn("[ClientSession] download ignore shell message: $next")
-                    }
+        return when (next) {
+            is ByteArray -> DownloadFrame.FileChunk(next)
+            is String -> {
+                if (next.contains("not found", ignoreCase = true)) {
+                    reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, next)
+                    DownloadFrame.NotFound
+                } else {
+                    logWarn("[ClientSession] download ignore shell message: $next")
+                    DownloadFrame.IgnoredShell
                 }
             }
-            null
+
+            else -> DownloadFrame.ConnectionClosed
         }
     }
 
@@ -326,6 +348,14 @@ class ClientSession(
         Failed
     }
 
+    sealed interface DownloadFrame {
+        data class FileChunk(val data: ByteArray) : DownloadFrame
+        data object NotFound : DownloadFrame
+        data object IdleTimeout : DownloadFrame
+        data object IgnoredShell : DownloadFrame
+        data object ConnectionClosed : DownloadFrame
+    }
+
     sealed interface ListFilesResult {
         data class Success(val items: List<RemoteFileEntry>) : ListFilesResult
         data class Error(val message: String) : ListFilesResult
@@ -339,7 +369,7 @@ class ClientSession(
 
     companion object {
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
-        private const val FILE_TRANSFER_TIMEOUT_MS = 180_000L
+        private const val DOWNLOAD_IDLE_TIMEOUT_MS = 5_000L
         private const val MAX_REMOTE_PATH = 4096
         private const val MAX_PAYLOAD_SIZE = 20 * 1024 * 1024
 

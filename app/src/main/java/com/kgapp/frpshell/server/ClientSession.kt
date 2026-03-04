@@ -12,18 +12,24 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-import org.java_websocket.WebSocket
 import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.EOFException
 import java.io.File
+import java.net.Socket
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ClientSession(
     val id: String,
-    private val connection: WebSocket,
+    private val socket: Socket,
     private val scope: CoroutineScope,
     private val onClosed: (String, String) -> Unit
 ) {
@@ -39,8 +45,11 @@ class ClientSession(
 
     private val closed = AtomicBoolean(false)
     private val ioMutex = Mutex()
-    private val textMessages = Channel<String>(Channel.UNLIMITED)
-    private val binaryMessages = Channel<ByteArray>(Channel.UNLIMITED)
+    private val writerMutex = Mutex()
+    private val shellMessages = Channel<String>(Channel.UNLIMITED)
+    private val fileMessages = Channel<ByteArray>(Channel.UNLIMITED)
+    private val input = BufferedInputStream(socket.getInputStream())
+    private val outputStream = BufferedOutputStream(socket.getOutputStream())
 
     @Volatile
     var lastTransferError: TransferError? = null
@@ -48,19 +57,14 @@ class ClientSession(
 
     fun start() {
         appendOutput("[register] $id")
-    }
-
-    fun onTextMessage(text: String) {
-        if (!textMessages.trySend(text).isSuccess) {
-            logWarn("[ClientSession] text queue full, drop message")
+        scope.launch(Dispatchers.IO) {
+            runReadLoop()
         }
     }
 
-    fun onBinaryMessage(payload: ByteArray) {
-        if (!binaryMessages.trySend(payload).isSuccess) {
-            logWarn("[ClientSession] binary queue full, drop message")
-        }
-    }
+    fun onTextMessage(text: String) = Unit
+
+    fun onBinaryMessage(payload: ByteArray) = Unit
 
     fun send(command: String) {
         if (command.isBlank()) return
@@ -82,8 +86,8 @@ class ClientSession(
         return ioMutex.withLock {
             if (!ensureOpen()) return@withLock "[ERROR] connection closed"
             runCatching {
-                connection.send("CMD $command")
-                val response = awaitText(timeoutMs)
+                sendMessage(TYPE_SHELL_CMD, command.toByteArray())
+                val response = awaitShell(timeoutMs)
                 response ?: "[ERROR] command timeout"
             }.getOrElse {
                 logError("[ClientSession] runManagedCommand failed", it)
@@ -100,24 +104,12 @@ class ClientSession(
             lastTransferError = null
             if (!ensureOpen()) return@withLock false
             runCatching {
-                connection.send("UPLOAD $safeRemotePath")
-                val ack = awaitText(FILE_TRANSFER_TIMEOUT_MS)
-                if (!ack.equals("ok", ignoreCase = true)) {
-                    reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, "UPLOAD ack invalid: $ack")
-                    return@runCatching false
-                }
-
                 val data = localFile.readBytes()
                 val total = data.size.toLong()
                 onProgress?.invoke(0, total)
-                connection.send(data)
+                sendMessage(TYPE_UPLOAD_REQ, safeRemotePath.toByteArray())
+                sendMessage(TYPE_FILE_DATA, data)
                 onProgress?.invoke(total, total)
-
-                val done = awaitText(FILE_TRANSFER_TIMEOUT_MS)
-                if (done != "UPLOAD_SUCCESS") {
-                    reportTransferError(TransferErrorCode.PROTOCOL_MISMATCH, "UPLOAD result invalid: $done")
-                    return@runCatching false
-                }
                 true
             }.getOrElse {
                 reportTransferError(TransferErrorCode.IO_INTERRUPTED, it.message ?: "upload failed")
@@ -133,8 +125,12 @@ class ClientSession(
             lastTransferError = null
             if (!ensureOpen()) return@withLock DownloadResult.Failed
             runCatching {
-                connection.send("DOWNLOAD $safeRemotePath")
-                val payload = awaitBinary(FILE_TRANSFER_TIMEOUT_MS) ?: return@runCatching DownloadResult.Failed
+                sendMessage(TYPE_DOWNLOAD_REQ, safeRemotePath.toByteArray())
+                val shellHint = awaitShell(500)
+                if (shellHint?.contains("not found", ignoreCase = true) == true) {
+                    return@runCatching DownloadResult.NotFound
+                }
+                val payload = awaitFile(FILE_TRANSFER_TIMEOUT_MS) ?: return@runCatching DownloadResult.Failed
 
                 targetFile.parentFile?.mkdirs()
                 val total = payload.size.toLong()
@@ -180,19 +176,80 @@ class ClientSession(
 
     fun close(reason: String = "manual close", cause: Throwable? = null) {
         if (!closed.compareAndSet(false, true)) return
-        runCatching { connection.close() }
-        textMessages.close()
-        binaryMessages.close()
+        runCatching { socket.close() }
+        shellMessages.close()
+        fileMessages.close()
         scope.cancel()
         val detail = cause?.message?.let { ": $it" } ?: ""
         onClosed(id, "$reason$detail")
     }
 
-    private fun ensureOpen(): Boolean = connection.isOpen
+    private fun ensureOpen(): Boolean = !socket.isClosed && socket.isConnected
 
-    private suspend fun awaitText(timeoutMs: Long): String? = withTimeoutOrNull(timeoutMs) { textMessages.receive() }
+    private suspend fun awaitShell(timeoutMs: Long): String? = withTimeoutOrNull(timeoutMs) { shellMessages.receive() }
 
-    private suspend fun awaitBinary(timeoutMs: Long): ByteArray? = withTimeoutOrNull(timeoutMs) { binaryMessages.receive() }
+    private suspend fun awaitFile(timeoutMs: Long): ByteArray? = withTimeoutOrNull(timeoutMs) { fileMessages.receive() }
+
+    private suspend fun sendMessage(type: Byte, payload: ByteArray) {
+        writerMutex.withLock {
+            val header = ByteBuffer.allocate(5).order(ByteOrder.BIG_ENDIAN)
+            header.putInt(payload.size)
+            header.put(type)
+            outputStream.write(header.array())
+            if (payload.isNotEmpty()) {
+                outputStream.write(payload)
+            }
+            outputStream.flush()
+        }
+    }
+
+    private suspend fun runReadLoop() {
+        try {
+            while (scope.isActive && ensureOpen()) {
+                val length = readInt32BE()
+                if (length <= 0 || length > MAX_PAYLOAD_SIZE) {
+                    reportTransferError(TransferErrorCode.INVALID_LENGTH, "invalid payload length: $length")
+                    break
+                }
+
+                val type = readByte()
+                val payload = readExact(length)
+                when (type) {
+                    TYPE_SHELL_CMD -> shellMessages.trySend(payload.toString(Charsets.UTF_8))
+                    TYPE_FILE_DATA -> fileMessages.trySend(payload)
+                    else -> logWarn("[ClientSession] unknown message type: 0x${type.toUByte().toString(16)}")
+                }
+            }
+        } catch (_: EOFException) {
+            // disconnected normally
+        } catch (e: Exception) {
+            logError("[ClientSession] read loop failed", e)
+        } finally {
+            close("read loop end")
+        }
+    }
+
+    private fun readInt32BE(): Int {
+        val bytes = readExact(4)
+        return ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN).int
+    }
+
+    private fun readByte(): Byte {
+        val value = input.read()
+        if (value < 0) throw EOFException("stream closed")
+        return value.toByte()
+    }
+
+    private fun readExact(length: Int): ByteArray {
+        val data = ByteArray(length)
+        var offset = 0
+        while (offset < length) {
+            val read = input.read(data, offset, length - offset)
+            if (read <= 0) throw EOFException("stream closed")
+            offset += read
+        }
+        return data
+    }
 
     private fun appendOutput(line: String) {
         _output.value += "$line\n"
@@ -261,6 +318,13 @@ class ClientSession(
         private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
         private const val FILE_TRANSFER_TIMEOUT_MS = 180_000L
         private const val MAX_REMOTE_PATH = 4096
+        private const val MAX_PAYLOAD_SIZE = 20 * 1024 * 1024
+
+        private const val TYPE_SHELL_CMD: Byte = 0x1
+        private const val TYPE_UPLOAD_REQ: Byte = 0x2
+        private const val TYPE_DOWNLOAD_REQ: Byte = 0x3
+        private const val TYPE_FILE_DATA: Byte = 0x8
+
         private const val LOG_TAG = "ClientSession"
     }
 }

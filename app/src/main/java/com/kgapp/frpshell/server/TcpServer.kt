@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
@@ -21,25 +21,30 @@ import java.util.concurrent.ConcurrentHashMap
 
 object TcpServer {
 
-    private const val CMD_PORT  = 9001
-    private const val FILE_PORT = 9002
+    private const val CMD_PORT             = 9001
+    private const val FILE_PORT            = 9002
+    private const val HANDSHAKE_TIMEOUT_MS = 10_000L
+    private const val PAIR_TIMEOUT_MS      = 15_000L
+    private const val ORPHAN_CLEANUP_MS    = 20_000L
+    private const val SOCK_IO_TIMEOUT_MS   = 30_000
 
-    // 握手超时：连上后必须在此时间内发来 token，否则关闭
-    private const val HANDSHAKE_TIMEOUT_MS  = 10_000L
-    // 配对超时：CMD 通道收到 token 后，等待 FILE 通道同 token 的最长时间
-    private const val PAIR_TIMEOUT_MS       = 15_000L
-    // 孤儿清理间隔
-    private const val ORPHAN_CLEANUP_MS     = 20_000L
+    // 协议常量
+    private const val TYPE_HANDSHAKE:     Byte = 0x00
+    private const val TYPE_HANDSHAKE_ACK: Byte = 0x05
+    private const val FLAG_NONE:          Byte = 0x00
 
-    private val sessions = ConcurrentHashMap<String, ClientSession>()
+    private const val LOG_TAG = "TcpServer"
+
+    private val sessions    = ConcurrentHashMap<String, ClientSession>()
+    private val pendingCmd  = ConcurrentHashMap<String, PendingConn>()
+    private val pendingFile = ConcurrentHashMap<String, PendingConn>()
 
     private val _clientIds = MutableStateFlow<List<String>>(emptyList())
     val clientIds: StateFlow<List<String>> = _clientIds.asStateFlow()
 
-    // 等待配对的 CMD 通道：token -> (socket, Connection, arrivalTime)
-    private val pendingCmd  = ConcurrentHashMap<String, PendingConn>()
-    // 等待配对的 FILE 通道：token -> (socket, Connection, arrivalTime)
-    private val pendingFile = ConcurrentHashMap<String, PendingConn>()
+    @Volatile private var serverScope: CoroutineScope? = null
+    @Volatile private var cmdServerSocket: ServerSocket? = null
+    @Volatile private var fileServerSocket: ServerSocket? = null
 
     private data class PendingConn(
         val socket: Socket,
@@ -47,10 +52,6 @@ object TcpServer {
         val token: String,
         val arrivedAt: Long = System.currentTimeMillis()
     )
-
-    @Volatile private var serverScope: CoroutineScope? = null
-    @Volatile private var cmdServerSocket: ServerSocket? = null
-    @Volatile private var fileServerSocket: ServerSocket? = null
 
     // --------------------------------------------------------
     //  启动
@@ -103,7 +104,7 @@ object TcpServer {
                 }
             }
 
-            // 孤儿连接清理（token 配对超时）
+            // 孤儿连接清理
             scope.launch {
                 while (isActive) {
                     delay(ORPHAN_CLEANUP_MS)
@@ -132,59 +133,62 @@ object TcpServer {
     }
 
     // --------------------------------------------------------
-    //  处理新连接：先读握手帧取 token，再尝试配对
+    //  处理新连接：握手 → 配对
     // --------------------------------------------------------
+    private suspend fun handleIncoming(socket: Socket, isCmd: Boolean) {
+        // 握手阶段用短超时，到时间 recvFrame() 内的 read() 会抛 SocketTimeoutException
+        socket.soTimeout = HANDSHAKE_TIMEOUT_MS.toInt()
+        val conn = Connection(socket)
 
-private suspend fun handleIncoming(socket: Socket, isCmd: Boolean) {
-    // 修复：设置 socket 读超时，确保阻塞 recvFrame() 能被超时打断
-    socket.soTimeout = HANDSHAKE_TIMEOUT_MS.toInt()
-    val conn = Connection(socket)
-
-    val frame = try {
-        withContext(Dispatchers.IO) { conn.recvFrame() }
-    } catch (e: Exception) {
-        logWarn("[TCP] 握手读取异常，关闭连接 isCmd=$isCmd : ${e.message}")
-        runCatching { socket.close() }
-        return
-    }
-
-    // 握手完成后恢复正常超时
-    socket.soTimeout = SOCK_IO_TIMEOUT_SEC * 1000
-
-    if (frame == null || frame.type != TYPE_HANDSHAKE) {
-        logWarn("[TCP] 握手帧无效，关闭连接 isCmd=$isCmd")
-        runCatching { socket.close() }
-        return
-    }
-
-    val token = frame.payload.toString(Charsets.UTF_8).trim()
-    if (token.length != 16) {
-        logWarn("[TCP] token 格式非法: '$token'")
-        runCatching { socket.close() }
-        return
-    }
-
-    conn.sendFrame(TYPE_HANDSHAKE_ACK, FLAG_NONE, ByteArray(0))
-    logWarn("[TCP] 握手完成 token=$token isCmd=$isCmd")
-
-    val pending = PendingConn(socket, conn, token)
-    if (isCmd) {
-        pendingCmd[token] = pending
-        val filePending = pendingFile.remove(token)
-        if (filePending != null) {
-            pendingCmd.remove(token)
-            bindClient(token, pending, filePending)
+        val frame = try {
+            withContext(Dispatchers.IO) { conn.recvFrame() }
+        } catch (e: Exception) {
+            logWarn("[TCP] 握手读取异常 isCmd=$isCmd : ${e.message}")
+            runCatching { socket.close() }
+            return
         }
-    } else {
-        pendingFile[token] = pending
-        val cmdPending = pendingCmd.remove(token)
-        if (cmdPending != null) {
-            pendingFile.remove(token)
-            bindClient(token, cmdPending, pending)
+
+        if (frame == null || frame.type != TYPE_HANDSHAKE) {
+            logWarn("[TCP] 握手帧无效，关闭连接 isCmd=$isCmd")
+            runCatching { socket.close() }
+            return
+        }
+
+        val token = frame.payload.toString(Charsets.UTF_8).trim()
+        if (token.length != 16) {
+            logWarn("[TCP] token 格式非法: '$token'")
+            runCatching { socket.close() }
+            return
+        }
+
+        // 握手成功，回 ACK，恢复正常 IO 超时
+        try {
+            conn.sendFrame(TYPE_HANDSHAKE_ACK, FLAG_NONE, ByteArray(0))
+        } catch (e: Exception) {
+            logWarn("[TCP] 发送 HANDSHAKE_ACK 失败: ${e.message}")
+            runCatching { socket.close() }
+            return
+        }
+        socket.soTimeout = SOCK_IO_TIMEOUT_MS
+        logWarn("[TCP] 握手完成 token=$token isCmd=$isCmd")
+
+        val pending = PendingConn(socket, conn, token)
+        if (isCmd) {
+            pendingCmd[token] = pending
+            val filePending = pendingFile.remove(token)
+            if (filePending != null) {
+                pendingCmd.remove(token)
+                bindClient(token, pending, filePending)
+            }
+        } else {
+            pendingFile[token] = pending
+            val cmdPending = pendingCmd.remove(token)
+            if (cmdPending != null) {
+                pendingFile.remove(token)
+                bindClient(token, cmdPending, pending)
+            }
         }
     }
-}
-
 
     // --------------------------------------------------------
     //  两条通道都就绪，建立 Session
@@ -246,11 +250,4 @@ private suspend fun handleIncoming(socket: Socket, isCmd: Boolean) {
         FrpLogBus.append(message)
         Log.e(LOG_TAG, message, throwable)
     }
-
-    // 协议常量（Kotlin 侧需要用到握手类型）
-    private const val TYPE_HANDSHAKE:     Byte = 0x00
-    private const val TYPE_HANDSHAKE_ACK: Byte = 0x05
-    private const val FLAG_NONE:          Byte = 0x00
-
-    private const val LOG_TAG = "TcpServer"
 }

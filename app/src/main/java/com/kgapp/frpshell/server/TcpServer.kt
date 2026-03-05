@@ -134,53 +134,57 @@ object TcpServer {
     // --------------------------------------------------------
     //  处理新连接：先读握手帧取 token，再尝试配对
     // --------------------------------------------------------
-    private suspend fun handleIncoming(socket: Socket, isCmd: Boolean) {
-        val conn = Connection(socket)
 
-        // 在握手超时内读取第一帧，必须是 TYPE_HANDSHAKE
-        val frame = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) {
-            kotlinx.coroutines.withContext(Dispatchers.IO) {
-                conn.recvFrame()
-            }
+private suspend fun handleIncoming(socket: Socket, isCmd: Boolean) {
+    // 修复：设置 socket 读超时，确保阻塞 recvFrame() 能被超时打断
+    socket.soTimeout = HANDSHAKE_TIMEOUT_MS.toInt()
+    val conn = Connection(socket)
+
+    val frame = try {
+        withContext(Dispatchers.IO) { conn.recvFrame() }
+    } catch (e: Exception) {
+        logWarn("[TCP] 握手读取异常，关闭连接 isCmd=$isCmd : ${e.message}")
+        runCatching { socket.close() }
+        return
+    }
+
+    // 握手完成后恢复正常超时
+    socket.soTimeout = SOCK_IO_TIMEOUT_SEC * 1000
+
+    if (frame == null || frame.type != TYPE_HANDSHAKE) {
+        logWarn("[TCP] 握手帧无效，关闭连接 isCmd=$isCmd")
+        runCatching { socket.close() }
+        return
+    }
+
+    val token = frame.payload.toString(Charsets.UTF_8).trim()
+    if (token.length != 16) {
+        logWarn("[TCP] token 格式非法: '$token'")
+        runCatching { socket.close() }
+        return
+    }
+
+    conn.sendFrame(TYPE_HANDSHAKE_ACK, FLAG_NONE, ByteArray(0))
+    logWarn("[TCP] 握手完成 token=$token isCmd=$isCmd")
+
+    val pending = PendingConn(socket, conn, token)
+    if (isCmd) {
+        pendingCmd[token] = pending
+        val filePending = pendingFile.remove(token)
+        if (filePending != null) {
+            pendingCmd.remove(token)
+            bindClient(token, pending, filePending)
         }
-
-        if (frame == null || frame.type != TYPE_HANDSHAKE) {
-            logWarn("[TCP] 握手失败或超时，关闭连接 isCmd=$isCmd")
-            runCatching { socket.close() }
-            return
-        }
-
-        val token = frame.payload.toString(Charsets.UTF_8).trim()
-        if (token.length != 16) {
-            logWarn("[TCP] token 格式非法: '$token'")
-            runCatching { socket.close() }
-            return
-        }
-
-        // 回 ACK
-        conn.sendFrame(TYPE_HANDSHAKE_ACK, FLAG_NONE, ByteArray(0))
-        logWarn("[TCP] 握手完成 token=$token isCmd=$isCmd")
-
-        val pending = PendingConn(socket, conn, token)
-
-        if (isCmd) {
-            pendingCmd[token] = pending
-            // 看 FILE 通道是否已到
-            val filePending = pendingFile.remove(token)
-            if (filePending != null) {
-                pendingCmd.remove(token)
-                bindClient(token, pending, filePending)
-            }
-        } else {
-            pendingFile[token] = pending
-            // 看 CMD 通道是否已到
-            val cmdPending = pendingCmd.remove(token)
-            if (cmdPending != null) {
-                pendingFile.remove(token)
-                bindClient(token, cmdPending, pending)
-            }
+    } else {
+        pendingFile[token] = pending
+        val cmdPending = pendingCmd.remove(token)
+        if (cmdPending != null) {
+            pendingFile.remove(token)
+            bindClient(token, cmdPending, pending)
         }
     }
+}
+
 
     // --------------------------------------------------------
     //  两条通道都就绪，建立 Session

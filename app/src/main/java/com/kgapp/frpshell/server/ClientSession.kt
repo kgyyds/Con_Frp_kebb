@@ -391,9 +391,9 @@ class ClientSession(
             .filter { it.isNotBlank() && !it.startsWith("total") && !it.startsWith("ls:") }
             .mapNotNull { line ->
                 val parts = line.split(Regex("\\s+"), limit = 9)
-                if (parts.size < 9) return@mapNotNull null
+                if (parts.size < 8) return@mapNotNull null  // 至少8列才处理
                 val perms = parts[0]
-                val name  = parts[8].trim()
+                val name  = parts.last().trim()  // 取最后一列，兼容8列/9列格式
                 if (name == "." || name == "..") return@mapNotNull null
                 val isDir = perms.firstOrNull() == 'd'
                 val full  = if (safePath == "/") "/$name" else "$safePath/$name"

@@ -1498,6 +1498,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun fileManagerCompress(item: RemoteFileItem, archiveName: String) {
+        if (archiveName.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            // 确保文件名以 .tar.gz 结尾
+            val finalArchiveName = if (!archiveName.endsWith(".tar.gz")) "$archiveName.tar.gz" else archiveName
+            val command = "tar -czf ${shellEscape(finalArchiveName)} ${shellEscape(item.name)}/"
+            val success = executeFileManagerCommand(command)
+            if (success) {
+                FrpLogBus.append("[文件管理] 压缩成功: $finalArchiveName")
+                refreshCurrentDirectory()
+            } else {
+                FrpLogBus.append("[文件管理] 压缩失败: $finalArchiveName")
+                _uiState.update { state ->
+                    state.copy(fileManagerErrorMessage = "压缩命令执行失败")
+                }
+            }
+        }
+    }
+
 
     fun fileManagerEdit(item: RemoteFileItem) {
         if (item.type == RemoteFileType.Directory) return

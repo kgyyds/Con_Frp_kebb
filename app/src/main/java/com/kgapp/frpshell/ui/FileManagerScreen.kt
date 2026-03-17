@@ -50,6 +50,7 @@ fun FileManagerScreen(
     onRename: (RemoteFileItem, String) -> Unit,
     onChmod: (RemoteFileItem, String) -> Unit,
     onDelete: (RemoteFileItem) -> Unit,
+    onCompress: (RemoteFileItem, String) -> Unit,
     transferVisible: Boolean,
     transferTitle: String,
     transferDone: Long,
@@ -61,6 +62,7 @@ fun FileManagerScreen(
     var chmodTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
     var editTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
     var deleteTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
+    var compressTarget by remember { mutableStateOf<RemoteFileItem?>(null) }
 
     Column(
         modifier = modifier
@@ -154,6 +156,15 @@ fun FileManagerScreen(
                                 text = { Text("编辑") },
                                 onClick = {
                                     editTarget = item
+                                    actionItem = null
+                                }
+                            )
+                        }
+                        if (item.type == RemoteFileType.Directory) {
+                            DropdownMenuItem(
+                                text = { Text("压缩") },
+                                onClick = {
+                                    onCompress(item)
                                     actionItem = null
                                 }
                             )
@@ -260,6 +271,36 @@ fun FileManagerScreen(
             },
             dismissButton = {
                 TextButton(onClick = { editTarget = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    compressTarget?.let { target ->
+        var archiveName by remember(target.name) { mutableStateOf("${target.name}.tar.gz") }
+        AlertDialog(
+            onDismissRequest = { compressTarget = null },
+            title = { Text("压缩文件夹") },
+            text = {
+                OutlinedTextField(
+                    value = archiveName,
+                    onValueChange = { archiveName = it },
+                    label = { Text("压缩文件名") }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (!archiveName.isBlank()) {
+                        onCompress(target, archiveName)
+                        compressTarget = null
+                    }
+                }) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { compressTarget = null }) {
                     Text("取消")
                 }
             }

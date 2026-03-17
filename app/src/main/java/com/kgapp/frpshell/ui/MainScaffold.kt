@@ -363,6 +363,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             onRename = vm::fileManagerRename,
                             onChmod = vm::fileManagerChmod,
                             onDelete = vm::fileManagerDelete,
+                            onCompress = vm::fileManagerCompress,
                             transferVisible = uiState.fileTransferVisible,
                             transferTitle = uiState.fileTransferTitle,
                             transferDone = uiState.fileTransferDone,

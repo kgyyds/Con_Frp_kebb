@@ -163,7 +163,7 @@ fun FileManagerScreen(
                             DropdownMenuItem(
                                 text = { Text("压缩") },
                                 onClick = {
-                                    compressTarget = item
+                                    onCompress(item)
                                     actionItem = null
                                 }
                             )

@@ -507,6 +507,35 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                 )
             }
 
+            uiState.compressTarget?.let { target ->
+                var archiveName by remember(target.name) { mutableStateOf("${target.name}.tar.gz") }
+                AlertDialog(
+                    onDismissRequest = vm::cancelCompress,
+                    title = { Text("压缩文件夹") },
+                    text = {
+                        OutlinedTextField(
+                            value = archiveName,
+                            onValueChange = { archiveName = it },
+                            label = { Text("压缩文件名") }
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            if (!archiveName.isBlank()) {
+                                vm.confirmCompress(archiveName)
+                            }
+                        }) {
+                            Text("确定")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = vm::cancelCompress) {
+                            Text("取消")
+                        }
+                    }
+                )
+            }
+
         }
     }
 }

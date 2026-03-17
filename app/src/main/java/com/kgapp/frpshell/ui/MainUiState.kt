@@ -85,6 +85,7 @@ data class MainUiState(
     val fileEditorOriginalContent: String = "",
     val fileEditorContent: String = "",
     val fileEditorConfirmDiscardVisible: Boolean = false,
+    val compressTarget: RemoteFileItem? = null,
     val fileTransferVisible: Boolean = false,
     val fileTransferTitle: String = "",
     val fileTransferDone: Long = 0L,

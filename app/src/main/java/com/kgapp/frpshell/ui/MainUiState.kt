@@ -133,7 +133,9 @@ data class MainUiState(
 
 data class ClientDisplayInfo(
     val modelName: String,
-    val serialNo: String
+    val serialNo: String,
+    val batteryCapacity: String = "unknown",
+    val uptimeSeconds: String = "unknown"
 )
 
 

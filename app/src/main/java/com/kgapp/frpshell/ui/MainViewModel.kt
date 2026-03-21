@@ -113,8 +113,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     display.serialNo.isBlank() ||
                                     display.modelName == "unknown" ||
                                     display.serialNo == "unknown" ||
-                                    display.batteryCapacity == "unknown" ||
-                                    display.uptimeSeconds == "unknown"
+                                    display.batteryPercent == "--" ||
+                                    display.uptimeHm == "--"
                                 if (needsRefresh) {
                                     launch(Dispatchers.IO) { refreshClientRuntimeInfo(id) }
                                 }
@@ -187,25 +187,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: "unknown"
-        val batteryCapacity = runManagedCommand(clientId, "cat /sys/class/power_supply/battery/capacity")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: "unknown"
-        val uptimeSeconds = runManagedCommand(clientId, "cat /proc/uptime | awk '{print $1}'")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: "unknown"
+        val batteryPercent = formatBatteryPercent(
+            runManagedCommand(clientId, "cat /sys/class/power_supply/battery/capacity")
+        )
+        val uptimeHm = formatUptimeHm(
+            runManagedCommand(clientId, "cat /proc/uptime")
+        )
 
         _uiState.update { state ->
             val existing = state.clientModels[clientId]
             val mergedInfo = (existing ?: ClientDisplayInfo(modelName = modelName, serialNo = serialNo)).copy(
                 modelName = if (modelName == "unknown") existing?.modelName ?: "unknown" else modelName,
                 serialNo = if (serialNo == "unknown") existing?.serialNo ?: "unknown" else serialNo,
-                batteryCapacity = batteryCapacity,
-                uptimeSeconds = uptimeSeconds
+                batteryPercent = batteryPercent,
+                uptimeHm = uptimeHm
             )
             state.copy(clientModels = state.clientModels + (clientId to mergedInfo))
         }
+    }
+
+
+    private fun formatBatteryPercent(rawValue: String?): String {
+        val value = rawValue
+            ?.trim()
+            ?.toIntOrNull()
+            ?.coerceIn(0, 100)
+            ?: return "--"
+        return "$value%"
+    }
+
+    private fun formatUptimeHm(rawValue: String?): String {
+        val seconds = rawValue
+            ?.trim()
+            ?.split(Regex("\\s+"))
+            ?.firstOrNull()
+            ?.toDoubleOrNull()
+            ?: return "--"
+
+        val totalMinutes = (seconds / 60).toLong()
+        val hours = totalMinutes / 60
+        val minutes = totalMinutes % 60
+        return String.format("%d:%02d", hours, minutes)
     }
 
     private fun observeFrpEvents() {

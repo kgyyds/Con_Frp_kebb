@@ -1,7 +1,12 @@
 package com.kgapp.frpshellpro.ui
 
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,15 +31,26 @@ fun DrawerContent(
 
     clientIds.forEach { id ->
         val displayInfo = clientModels[id]
-        NavigationDrawerItem(
-            label = {
-                Column {
-                    Text(displayInfo?.modelName ?: id)
-                    Text(displayInfo?.serialNo ?: id)
+        val selected = current is ShellTarget.Client && current.id == id
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .clickable { onSelect(ShellTarget.Client(id)) },
+            colors = CardDefaults.cardColors(
+                containerColor = if (selected) {
+                    MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
                 }
-            },
-            selected = current is ShellTarget.Client && current.id == id,
-            onClick = { onSelect(ShellTarget.Client(id)) }
-        )
+            )
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Text("主板码：${displayInfo?.serialNo ?: id}")
+                Text("机型：${displayInfo?.modelName ?: "--"}")
+                Text("电量：${displayInfo?.batteryPercent ?: "--"}")
+                Text("开机时间：${displayInfo?.uptimeHm ?: "--"}")
+            }
+        }
     }
 }

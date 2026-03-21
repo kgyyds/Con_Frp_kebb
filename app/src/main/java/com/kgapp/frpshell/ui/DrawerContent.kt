@@ -18,6 +18,7 @@ import com.kgapp.frpshellpro.model.ShellTarget
 fun DrawerContent(
     current: ShellTarget,
     clientIds: List<String>,
+    boardCodeByClientId: Map<String, String>,
     clientModels: Map<String, ClientDisplayInfo>,
     onSelect: (ShellTarget) -> Unit
 ) {
@@ -31,6 +32,7 @@ fun DrawerContent(
 
     clientIds.forEach { id ->
         val displayInfo = clientModels[id]
+        val boardCodeTitle = boardCodeByClientId[id] ?: id
         val selected = current is ShellTarget.Client && current.id == id
         Card(
             modifier = Modifier
@@ -46,7 +48,7 @@ fun DrawerContent(
             )
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                Text("主板码：${displayInfo?.serialNo ?: id}")
+                Text(boardCodeTitle)
                 Text("机型：${displayInfo?.modelName ?: "--"}")
                 Text("电量：${displayInfo?.batteryPercent ?: "--"}")
                 Text("开机时间：${displayInfo?.uptimeHm ?: "--"}")

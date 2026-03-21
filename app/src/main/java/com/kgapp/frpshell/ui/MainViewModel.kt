@@ -110,9 +110,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 val display = _uiState.value.clientModels[id]
                                 val needsRefresh = display == null ||
                                     display.modelName.isBlank() ||
-                                    display.serialNo.isBlank() ||
+                                    display.boardCode.isBlank() ||
                                     display.modelName == "unknown" ||
-                                    display.serialNo == "unknown" ||
+                                    display.boardCode == "unknown" ||
                                     display.batteryPercent == "--" ||
                                     display.uptimeHm == "--"
                                 if (needsRefresh) {
@@ -129,10 +129,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 val managerAlive = state.fileManagerVisible && state.fileManagerClientId in ids
                                 val editorAlive = state.fileEditorVisible && state.fileManagerClientId in ids
                                 val validModels = state.clientModels.filterKeys { it in ids }
+                                val validBoardCodes = state.boardCodeByClientId.filterKeys { it in ids }
                                 val validShell = state.shellItemsByClient.filterKeys { it in ids }
 
                                 state.copy(
                                     clientIds = ids,
+                                    boardCodeByClientId = validBoardCodes,
                                     clientModels = validModels,
                                     shellItemsByClient = validShell,
                                     selectedTarget = safeTarget,
@@ -156,17 +158,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repeat(10) { attempt ->
             val registration = networkThread.currentSession(clientId)?.registrationInfo
             val modelName = registration?.deviceName?.takeIf { it.isNotBlank() }
-            val serialNo = registration?.deviceId?.takeIf { it.isNotBlank() }
+            val boardCode = registration?.deviceId?.takeIf { it.isNotBlank() }
 
-            if (modelName != null || serialNo != null) {
+            if (modelName != null || boardCode != null) {
                 _uiState.update {
+                    val existing = it.clientModels[clientId]
+                    val mergedInfo = (existing ?: ClientDisplayInfo(modelName = "unknown", boardCode = "unknown")).copy(
+                        modelName = modelName ?: existing?.modelName ?: "unknown",
+                        boardCode = boardCode ?: existing?.boardCode ?: "unknown"
+                    )
+                    val boardCodeMap = if (boardCode != null && boardCode != "unknown") {
+                        it.boardCodeByClientId + (clientId to boardCode)
+                    } else {
+                        it.boardCodeByClientId
+                    }
                     it.copy(
-                        clientModels = it.clientModels + (
-                            clientId to ClientDisplayInfo(
-                                modelName = modelName ?: clientId,
-                                serialNo = serialNo ?: clientId
-                            )
-                        )
+                        boardCodeByClientId = boardCodeMap,
+                        clientModels = it.clientModels + (clientId to mergedInfo)
                     )
                 }
                 return
@@ -179,7 +187,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun refreshClientRuntimeInfo(clientId: String) {
-        val serialNo = runManagedCommand(clientId, "getprop ro.boot.serialno")
+        val boardCode = runManagedCommand(clientId, "getprop ro.boot.serialno")
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: "unknown"
@@ -196,13 +204,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         _uiState.update { state ->
             val existing = state.clientModels[clientId]
-            val mergedInfo = (existing ?: ClientDisplayInfo(modelName = modelName, serialNo = serialNo)).copy(
+            val mergedInfo = (existing ?: ClientDisplayInfo(modelName = modelName, boardCode = boardCode)).copy(
                 modelName = if (modelName == "unknown") existing?.modelName ?: "unknown" else modelName,
-                serialNo = if (serialNo == "unknown") existing?.serialNo ?: "unknown" else serialNo,
+                boardCode = if (boardCode == "unknown") existing?.boardCode ?: "unknown" else boardCode,
                 batteryPercent = batteryPercent,
                 uptimeHm = uptimeHm
             )
-            state.copy(clientModels = state.clientModels + (clientId to mergedInfo))
+            val boardCodeMap = if (mergedInfo.boardCode != "unknown" && mergedInfo.boardCode.isNotBlank()) {
+                state.boardCodeByClientId + (clientId to mergedInfo.boardCode)
+            } else {
+                state.boardCodeByClientId
+            }
+            state.copy(
+                boardCodeByClientId = boardCodeMap,
+                clientModels = state.clientModels + (clientId to mergedInfo)
+            )
         }
     }
 

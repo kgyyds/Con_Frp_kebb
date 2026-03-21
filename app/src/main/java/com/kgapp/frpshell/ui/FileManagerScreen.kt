@@ -113,6 +113,8 @@ fun FileManagerScreen(
                                 onClick = {
                                     if (item.type == RemoteFileType.Directory) {
                                         onOpenFile(item)
+                                    } else if (isImageFileName(item.name)) {
+                                        onOpenFile(item)
                                     } else {
                                         editTarget = item
                                     }
@@ -297,4 +299,14 @@ fun FileManagerScreen(
         )
     }
 
+}
+
+private fun isImageFileName(fileName: String): Boolean {
+    val lowerName = fileName.lowercase()
+    return lowerName.endsWith(".jpg") ||
+        lowerName.endsWith(".jpeg") ||
+        lowerName.endsWith(".png") ||
+        lowerName.endsWith(".webp") ||
+        lowerName.endsWith(".gif") ||
+        lowerName.endsWith(".bmp")
 }

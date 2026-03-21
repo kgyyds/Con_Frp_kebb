@@ -187,12 +187,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun refreshClientRuntimeInfo(clientId: String) {
-        val boardCode = runManagedCommand(clientId, "getprop ro.boot.serialno")
-            ?.trim()
+        val boardCode = extractFirstCommandValue(
+            runManagedCommand(clientId, "getprop ro.boot.serialno")
+        )
             ?.takeIf { it.isNotBlank() }
             ?: "unknown"
-        val modelName = runManagedCommand(clientId, "getprop ro.product.model")
-            ?.trim()
+        val modelName = extractFirstCommandValue(
+            runManagedCommand(clientId, "getprop ro.product.model")
+        )
             ?.takeIf { it.isNotBlank() }
             ?: "unknown"
         val batteryPercent = formatBatteryPercent(
@@ -224,26 +226,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
 
     private fun formatBatteryPercent(rawValue: String?): String {
-        val value = rawValue
-            ?.trim()
-            ?.toIntOrNull()
+        val value = sanitizeCommandOutput(rawValue)
+            .asSequence()
+            .mapNotNull { it.toIntOrNull() }
+            .firstOrNull()
             ?.coerceIn(0, 100)
             ?: return "--"
         return "$value%"
     }
 
     private fun formatUptimeHm(rawValue: String?): String {
-        val seconds = rawValue
-            ?.trim()
-            ?.split(Regex("\\s+"))
-            ?.firstOrNull()
-            ?.toDoubleOrNull()
+        val seconds = sanitizeCommandOutput(rawValue)
+            .asSequence()
+            .mapNotNull { line ->
+                line.split(Regex("\\s+"))
+                    .firstOrNull()
+                    ?.toDoubleOrNull()
+            }
+            .firstOrNull()
             ?: return "--"
 
         val totalMinutes = (seconds / 60).toLong()
         val hours = totalMinutes / 60
         val minutes = totalMinutes % 60
         return String.format("%d:%02d", hours, minutes)
+    }
+
+    private fun extractFirstCommandValue(raw: String?): String? {
+        return sanitizeCommandOutput(raw).firstOrNull()
+    }
+
+    private fun sanitizeCommandOutput(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return raw
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .filterNot { isShellNoiseLine(it) }
+            .toList()
+    }
+
+    private fun isShellNoiseLine(line: String): Boolean {
+        if (line.startsWith("sh:", ignoreCase = true)) return true
+        if (line.contains("can't find tty fd", ignoreCase = true)) return true
+        if (line.contains("job control", ignoreCase = true)) return true
+        if (line.startsWith(":/") && line.endsWith("#")) return true
+        return false
     }
 
     private fun observeFrpEvents() {

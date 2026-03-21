@@ -108,9 +108,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                             ids.forEach { id ->
                                 val display = _uiState.value.clientModels[id]
-                                val needsRefresh = display == null || display.modelName == id || display.serialNo == id
+                                val needsRefresh = display == null ||
+                                    display.modelName.isBlank() ||
+                                    display.serialNo.isBlank() ||
+                                    display.modelName == "unknown" ||
+                                    display.serialNo == "unknown" ||
+                                    display.batteryCapacity == "unknown" ||
+                                    display.uptimeSeconds == "unknown"
                                 if (needsRefresh) {
-                                    launch(Dispatchers.IO) { refreshClientDisplayInfo(id) }
+                                    launch(Dispatchers.IO) { refreshClientRuntimeInfo(id) }
                                 }
                             }
 
@@ -169,6 +175,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (attempt < 9) {
                 delay(300)
             }
+        }
+    }
+
+    private suspend fun refreshClientRuntimeInfo(clientId: String) {
+        val serialNo = runManagedCommand(clientId, "getprop ro.boot.serialno")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: "unknown"
+        val modelName = runManagedCommand(clientId, "getprop ro.product.model")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: "unknown"
+        val batteryCapacity = runManagedCommand(clientId, "cat /sys/class/power_supply/battery/capacity")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: "unknown"
+        val uptimeSeconds = runManagedCommand(clientId, "cat /proc/uptime | awk '{print $1}'")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: "unknown"
+
+        _uiState.update { state ->
+            val existing = state.clientModels[clientId]
+            val mergedInfo = (existing ?: ClientDisplayInfo(modelName = modelName, serialNo = serialNo)).copy(
+                modelName = if (modelName == "unknown") existing?.modelName ?: "unknown" else modelName,
+                serialNo = if (serialNo == "unknown") existing?.serialNo ?: "unknown" else serialNo,
+                batteryCapacity = batteryCapacity,
+                uptimeSeconds = uptimeSeconds
+            )
+            state.copy(clientModels = state.clientModels + (clientId to mergedInfo))
         }
     }
 
@@ -1734,7 +1770,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun currentSession(clientId: String): ClientSession? = networkThread.currentSession(clientId)
 
     private suspend fun runManagedCommand(clientId: String, command: String, timeoutMs: Long = 10_000L): String? {
-        return shellUseCase.runManagedCommand(clientId, command, timeoutMs)
+        return runCatching { shellUseCase.runManagedCommand(clientId, command, timeoutMs) }
+            .getOrNull()
     }
 
     private suspend fun listFiles(path: String): ClientSession.ListFilesResult {

@@ -140,7 +140,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
             gesturesEnabled = !isSettings && !isDeviceInfo,
             drawerContent = {
                 if (!isSettings) {
-                    ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.5f)) {
+                    ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.7f)) {
                         DrawerContent(
                             current = uiState.selectedTarget,
                             clientIds = uiState.clientIds,

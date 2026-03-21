@@ -11,6 +11,8 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.io.*
 import java.net.Socket
+import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -108,40 +110,36 @@ class Connection(private val socket: Socket) {
     }
 
     // 阻塞读取一帧（在 IO 线程调用）
-    fun recvFrame(): Frame? {
-        return runCatching {
-            val headerBuf = readExact(HEADER_SIZE)
-            val bb = ByteBuffer.wrap(headerBuf).order(ByteOrder.BIG_ENDIAN)
+    @Throws(IOException::class, SocketTimeoutException::class, ConnectionProtocolException::class)
+    fun recvFrame(): Frame {
+        val headerBuf = readExact(HEADER_SIZE)
+        val bb = ByteBuffer.wrap(headerBuf).order(ByteOrder.BIG_ENDIAN)
 
-            val magic      = bb.int
-            val seq        = bb.int.toLong() and 0xFFFFFFFFL
-            val type       = bb.get()
-            val flags      = bb.get()
-            /*reserved*/     bb.short
-            val payloadLen = bb.int
+        val magic      = bb.int
+        val seq        = bb.int.toLong() and 0xFFFFFFFFL
+        val type       = bb.get()
+        val flags      = bb.get()
+        /*reserved*/     bb.short
+        val payloadLen = bb.int
 
-            if (magic != MAGIC) {
-                Log.e("Connection", "魔数不匹配: 0x${magic.toString(16)}")
-                return null
-            }
-            if (payloadLen < 0 || payloadLen > MAX_PAYLOAD) {
-                Log.e("Connection", "payload 超限: $payloadLen")
-                return null
-            }
+        if (magic != MAGIC) {
+            throw ConnectionProtocolException("魔数不匹配: 0x${magic.toString(16)}")
+        }
+        if (payloadLen < 0 || payloadLen > MAX_PAYLOAD) {
+            throw ConnectionProtocolException("payload 超限: $payloadLen")
+        }
 
-            val payload = if (payloadLen > 0) readExact(payloadLen) else ByteArray(0)
-            val crcBuf  = readExact(4)
-            val recvCrc = ByteBuffer.wrap(crcBuf).order(ByteOrder.BIG_ENDIAN).int.toLong() and 0xFFFFFFFFL
+        val payload = if (payloadLen > 0) readExact(payloadLen) else ByteArray(0)
+        val crcBuf  = readExact(4)
+        val recvCrc = ByteBuffer.wrap(crcBuf).order(ByteOrder.BIG_ENDIAN).int.toLong() and 0xFFFFFFFFL
 
-            // 校验 CRC（用同样的 header 原始字节）
-            val calcCrc = crc32Of(headerBuf, payload)
-            if (calcCrc != recvCrc) {
-                Log.e("Connection", "CRC 校验失败，丢弃帧 seq=$seq")
-                return null
-            }
+        // 校验 CRC（用同样的 header 原始字节）
+        val calcCrc = crc32Of(headerBuf, payload)
+        if (calcCrc != recvCrc) {
+            throw ConnectionProtocolException("CRC 校验失败，丢弃帧 seq=$seq")
+        }
 
-            Frame(seq, type, flags, payload)
-        }.getOrElse { null }
+        return Frame(seq, type, flags, payload)
     }
 
     fun close() = runCatching { socket.close() }
@@ -157,6 +155,8 @@ class Connection(private val socket: Socket) {
         return buf
     }
 }
+
+class ConnectionProtocolException(message: String) : IOException(message)
 
 // ============================================================
 //  ClientSession（命令通道）
@@ -428,7 +428,7 @@ class ClientSession(
     private suspend fun runCmdReadLoop() {
         try {
             while (scope.isActive && cmdConn.isOpen) {
-                val frame = withContext(Dispatchers.IO) { cmdConn.recvFrame() } ?: break
+                val frame = withContext(Dispatchers.IO) { cmdConn.recvFrame() }
                 lastPongMs.set(System.currentTimeMillis())
 
                 // 需要 ACK 的帧，先回复
@@ -475,7 +475,21 @@ class ClientSession(
     private suspend fun runFileReadLoop() {
         try {
             while (scope.isActive && fileConn.isOpen) {
-                val frame = withContext(Dispatchers.IO) { fileConn.recvFrame() } ?: break
+                val frame = try {
+                    withContext(Dispatchers.IO) { fileConn.recvFrame() }
+                } catch (e: SocketTimeoutException) {
+                    Log.d(LOG_TAG, "[file-loop] read timeout, keep alive")
+                    continue
+                } catch (e: EOFException) {
+                    Log.i(LOG_TAG, "[file-loop] eof, peer closed: ${e.message}")
+                    break
+                } catch (e: SocketException) {
+                    Log.i(LOG_TAG, "[file-loop] socket closed: ${e.message}")
+                    break
+                } catch (e: ConnectionProtocolException) {
+                    logWarn("[file-loop] protocol error, close session: ${e.message}")
+                    break
+                }
 
                 when (frame.type) {
                     TYPE_FILE_OPEN -> {

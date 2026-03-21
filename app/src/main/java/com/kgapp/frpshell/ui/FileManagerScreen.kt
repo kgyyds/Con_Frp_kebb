@@ -104,7 +104,7 @@ fun FileManagerScreen(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            items(files, key = { "${it.type}:${it.name}" }) { item ->
+            items(files, key = { it.path }) { item ->
                 Box {
                     Row(
                         modifier = Modifier

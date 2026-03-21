@@ -126,6 +126,7 @@ data class MainUiState(
     val locationAddressCnLoading: Boolean = false,
     val locationAddressCn: String? = null,
     val locationAddressCnErrorMessage: String? = null,
+    val boardCodeByClientId: Map<String, String> = emptyMap(),
     val clientModels: Map<String, ClientDisplayInfo> = emptyMap(),
     val shellItemsByClient: Map<String, List<ShellCommandItem>> = emptyMap(),
     val quickCommands: List<QuickCommandItem> = emptyList()
@@ -133,7 +134,7 @@ data class MainUiState(
 
 data class ClientDisplayInfo(
     val modelName: String,
-    val serialNo: String,
+    val boardCode: String,
     val batteryPercent: String = "--",
     val uptimeHm: String = "--"
 )

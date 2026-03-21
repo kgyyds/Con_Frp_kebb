@@ -144,6 +144,7 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         DrawerContent(
                             current = uiState.selectedTarget,
                             clientIds = uiState.clientIds,
+                            boardCodeByClientId = uiState.boardCodeByClientId,
                             clientModels = uiState.clientModels,
                             onSelect = {
                                 vm.onSelectTarget(it)

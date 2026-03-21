@@ -1563,7 +1563,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            downloadRemoteFileToCache(item)
+            if (isImageFile(item.name)) {
+                downloadAndOpenImageViewer(item)
+            } else {
+                openEditorForRemoteFile(item)
+            }
         }
     }
 
@@ -1672,15 +1676,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val cacheFile = File(getApplication<Application>().cacheDir, "download_${state.fileManagerClientId}_${item.name}")
         val clientId = state.fileManagerClientId ?: return
 
-        beginTransfer("下载中：$remotePath")
-        when (fileManagerUseCase.downloadFile(clientId, remotePath, cacheFile) { done, total ->
-            reportTransfer(done, total)
-        }) {
-            ClientSession.DownloadResult.Success -> FrpLogBus.append("[文件管理] 下载成功：$remotePath -> ${cacheFile.absolutePath}")
-            ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[文件管理] 远程文件不存在：$remotePath")
-            ClientSession.DownloadResult.Failed -> logTransferFailure(clientId, "[文件管理] 下载失败：$remotePath")
-        }
-        endTransfer()
+        downloadRemoteFile(clientId, remotePath, cacheFile)
     }
 
     fun fileManagerDownload(item: RemoteFileItem) {
@@ -1693,16 +1689,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val localFile = File(outputDir, item.name)
             val clientId = state.fileManagerClientId ?: return@launch
 
-            beginTransfer("下载中：$remotePath")
-            when (fileManagerUseCase.downloadFile(clientId, remotePath, localFile) { done, total ->
-                reportTransfer(done, total)
-            }) {
-                ClientSession.DownloadResult.Success -> FrpLogBus.append("[文件管理] 下载成功：$remotePath -> ${localFile.absolutePath}")
-                ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[文件管理] 远程文件不存在：$remotePath")
-                ClientSession.DownloadResult.Failed -> logTransferFailure(clientId, "[文件管理] 下载失败：$remotePath")
-            }
-            endTransfer()
+            downloadRemoteFile(clientId, remotePath, localFile)
         }
+    }
+
+    private fun isImageFile(fileName: String): Boolean {
+        val lowerName = fileName.lowercase()
+        return lowerName.endsWith(".jpg") ||
+            lowerName.endsWith(".jpeg") ||
+            lowerName.endsWith(".png") ||
+            lowerName.endsWith(".webp") ||
+            lowerName.endsWith(".gif") ||
+            lowerName.endsWith(".bmp")
+    }
+
+    private suspend fun downloadAndOpenImageViewer(item: RemoteFileItem) {
+        val state = _uiState.value
+        val clientId = state.fileManagerClientId ?: return
+        val remotePath = appendPath(state.fileManagerPath, item.name)
+        val timestamp = System.currentTimeMillis()
+        val extension = item.name.substringAfterLast('.', "").takeIf { it.isNotBlank() }?.let { ".$it" } ?: ""
+        val cacheFile = File(
+            getApplication<Application>().cacheDir,
+            "preview_${clientId}_${item.name.substringBeforeLast('.')}_$timestamp$extension"
+        )
+
+        when (downloadRemoteFile(clientId, remotePath, cacheFile)) {
+            ClientSession.DownloadResult.Success -> {
+                _uiState.update {
+                    it.copy(
+                        screenViewerVisible = true,
+                        screenViewerImagePath = cacheFile.absolutePath,
+                        screenViewerTimestamp = System.currentTimeMillis()
+                    )
+                }
+            }
+
+            ClientSession.DownloadResult.NotFound -> {
+                FrpLogBus.append("[文件管理] 图片预览失败：远程文件不存在：$remotePath")
+            }
+
+            ClientSession.DownloadResult.Failed -> {
+                logTransferFailure(clientId, "[文件管理] 图片预览下载失败：$remotePath")
+            }
+        }
+    }
+
+    private suspend fun downloadRemoteFile(
+        clientId: String,
+        remotePath: String,
+        localFile: File
+    ): ClientSession.DownloadResult {
+        beginTransfer("下载中：$remotePath")
+        val result = fileManagerUseCase.downloadFile(clientId, remotePath, localFile) { done, total ->
+            reportTransfer(done, total)
+        }
+        when (result) {
+            ClientSession.DownloadResult.Success -> FrpLogBus.append("[文件管理] 下载成功：$remotePath -> ${localFile.absolutePath}")
+            ClientSession.DownloadResult.NotFound -> FrpLogBus.append("[文件管理] 远程文件不存在：$remotePath")
+            ClientSession.DownloadResult.Failed -> logTransferFailure(clientId, "[文件管理] 下载失败：$remotePath")
+        }
+        endTransfer()
+        return result
     }
 
     fun fileManagerLargeFileUpload(item: RemoteFileItem) {

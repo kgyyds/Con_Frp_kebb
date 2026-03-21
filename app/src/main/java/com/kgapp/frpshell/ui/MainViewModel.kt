@@ -1716,12 +1716,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         when (downloadRemoteFile(clientId, remotePath, cacheFile)) {
             ClientSession.DownloadResult.Success -> {
-                _uiState.update {
-                    it.copy(
-                        screenViewerVisible = true,
-                        screenViewerImagePath = cacheFile.absolutePath,
-                        screenViewerTimestamp = System.currentTimeMillis()
+                val isValidDownloadedFile = cacheFile.exists() && cacheFile.length() > 0
+                if (isValidDownloadedFile) {
+                    _uiState.update {
+                        it.copy(
+                            screenViewerVisible = true,
+                            screenViewerImagePath = cacheFile.absolutePath,
+                            screenViewerTimestamp = System.currentTimeMillis(),
+                            fileManagerErrorMessage = null
+                        )
+                    }
+                } else {
+                    val errorMessage = "图片下载成功但文件无效，无法预览"
+                    FrpLogBus.append(
+                        "[文件管理] 图片预览失败：下载文件无效：$remotePath -> ${cacheFile.absolutePath}, exists=${cacheFile.exists()}, length=${cacheFile.length()}"
                     )
+                    _uiState.update {
+                        it.copy(
+                            screenViewerVisible = false,
+                            fileManagerErrorMessage = errorMessage
+                        )
+                    }
                 }
             }
 

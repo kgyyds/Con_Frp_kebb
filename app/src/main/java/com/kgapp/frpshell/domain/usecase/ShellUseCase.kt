@@ -1,12 +1,18 @@
 package com.kgapp.frpshellpro.domain.usecase
 
 import com.kgapp.frpshellpro.data.repository.DeviceCommandRepository
+import com.kgapp.frpshellpro.core.NetCommandPriority
 
 class ShellUseCase(
     private val repository: DeviceCommandRepository
 ) {
-    suspend fun runManagedCommand(clientId: String, command: String, timeoutMs: Long = 10_000L): String? {
-        return repository.runManagedCommand(clientId, command, timeoutMs)
+    suspend fun runManagedCommand(
+        clientId: String,
+        command: String,
+        timeoutMs: Long = 10_000L,
+        priority: NetCommandPriority = NetCommandPriority.BACKGROUND
+    ): String? {
+        return repository.runManagedCommand(clientId, command, timeoutMs, priority)
     }
 
     fun validateRecordConfig(host: String, portText: String, startTemplate: String, stopTemplate: String): String? {

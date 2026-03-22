@@ -20,7 +20,8 @@ sealed interface NetCommand {
         val clientId: String,
         val command: String,
         val timeoutMs: Long,
-        val result: CompletableDeferred<String?>
+        val result: CompletableDeferred<String?>,
+        val priority: NetCommandPriority = NetCommandPriority.BACKGROUND
     ) : NetCommand
 
     data class UploadFile(
@@ -28,7 +29,8 @@ sealed interface NetCommand {
         val remotePath: String,
         val localFile: File,
         val progress: ((Long, Long) -> Unit)?,
-        val result: CompletableDeferred<Boolean>
+        val result: CompletableDeferred<Boolean>,
+        val priority: NetCommandPriority = NetCommandPriority.BACKGROUND
     ) : NetCommand
 
     data class DownloadFile(
@@ -36,14 +38,21 @@ sealed interface NetCommand {
         val remotePath: String,
         val targetFile: File,
         val progress: ((Long, Long) -> Unit)?,
-        val result: CompletableDeferred<ClientSession.DownloadResult>
+        val result: CompletableDeferred<ClientSession.DownloadResult>,
+        val priority: NetCommandPriority = NetCommandPriority.BACKGROUND
     ) : NetCommand
 
     data class ListFiles(
         val clientId: String,
         val path: String,
-        val result: CompletableDeferred<ClientSession.ListFilesResult>
+        val result: CompletableDeferred<ClientSession.ListFilesResult>,
+        val priority: NetCommandPriority = NetCommandPriority.BACKGROUND
     ) : NetCommand
+}
+
+enum class NetCommandPriority {
+    INTERACTIVE,
+    BACKGROUND
 }
 
 sealed interface NetEvent {

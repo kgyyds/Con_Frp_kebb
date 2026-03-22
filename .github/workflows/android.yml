@@ -7,13 +7,13 @@ on:
   push:
     branches:
       - main
-      - dev2
+      - dev
     tags:
       - "v*"
   pull_request:
     branches:
       - main
-      - dev2
+      - dev
   workflow_dispatch:
 
 jobs:

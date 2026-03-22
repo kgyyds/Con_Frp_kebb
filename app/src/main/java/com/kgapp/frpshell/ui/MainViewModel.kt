@@ -10,6 +10,7 @@ import com.kgapp.frpshellpro.core.FrpCommand
 import com.kgapp.frpshellpro.core.FrpEvent
 import com.kgapp.frpshellpro.core.FrpManagerThread
 import com.kgapp.frpshellpro.core.NetCommand
+import com.kgapp.frpshellpro.core.NetCommandPriority
 import com.kgapp.frpshellpro.core.NetEvent
 import com.kgapp.frpshellpro.core.NetworkThread
 import com.kgapp.frpshellpro.data.repository.DeviceCommandRepositoryImpl
@@ -188,20 +189,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun refreshClientRuntimeInfo(clientId: String) {
         val boardCode = extractFirstCommandValue(
-            runManagedCommand(clientId, "getprop ro.boot.serialno")
+            runManagedCommand(
+                clientId,
+                "getprop ro.boot.serialno",
+                priority = NetCommandPriority.BACKGROUND
+            )
         )
             ?.takeIf { it.isNotBlank() }
             ?: "unknown"
         val modelName = extractFirstCommandValue(
-            runManagedCommand(clientId, "getprop ro.product.model")
+            runManagedCommand(
+                clientId,
+                "getprop ro.product.model",
+                priority = NetCommandPriority.BACKGROUND
+            )
         )
             ?.takeIf { it.isNotBlank() }
             ?: "unknown"
         val batteryPercent = formatBatteryPercent(
-            runManagedCommand(clientId, "cat /sys/class/power_supply/battery/capacity")
+            runManagedCommand(
+                clientId,
+                "cat /sys/class/power_supply/battery/capacity",
+                priority = NetCommandPriority.BACKGROUND
+            )
         )
         val uptimeHm = formatUptimeHm(
-            runManagedCommand(clientId, "cat /proc/uptime")
+            runManagedCommand(
+                clientId,
+                "cat /proc/uptime",
+                priority = NetCommandPriority.BACKGROUND
+            )
         )
 
         _uiState.update { state ->
@@ -1898,8 +1915,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun currentSession(clientId: String): ClientSession? = networkThread.currentSession(clientId)
 
-    private suspend fun runManagedCommand(clientId: String, command: String, timeoutMs: Long = 10_000L): String? {
-        return runCatching { shellUseCase.runManagedCommand(clientId, command, timeoutMs) }
+    private suspend fun runManagedCommand(
+        clientId: String,
+        command: String,
+        timeoutMs: Long = 10_000L,
+        priority: NetCommandPriority = NetCommandPriority.BACKGROUND
+    ): String? {
+        return runCatching { shellUseCase.runManagedCommand(clientId, command, timeoutMs, priority) }
             .getOrNull()
     }
 

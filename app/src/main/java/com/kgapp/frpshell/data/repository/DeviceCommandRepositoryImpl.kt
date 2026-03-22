@@ -1,6 +1,7 @@
 package com.kgapp.frpshellpro.data.repository
 
 import com.kgapp.frpshellpro.core.NetCommand
+import com.kgapp.frpshellpro.core.NetCommandPriority
 import com.kgapp.frpshellpro.core.NetworkThread
 import com.kgapp.frpshellpro.server.ClientSession
 import kotlinx.coroutines.CompletableDeferred
@@ -10,9 +11,14 @@ class DeviceCommandRepositoryImpl(
     private val networkThread: NetworkThread,
     private val currentSession: (String) -> ClientSession?
 ) : DeviceCommandRepository {
-    override suspend fun runManagedCommand(clientId: String, command: String, timeoutMs: Long): String? {
+    override suspend fun runManagedCommand(
+        clientId: String,
+        command: String,
+        timeoutMs: Long,
+        priority: NetCommandPriority
+    ): String? {
         val deferred = CompletableDeferred<String?>()
-        networkThread.post(NetCommand.RunManaged(clientId, command, timeoutMs, deferred))
+        networkThread.post(NetCommand.RunManaged(clientId, command, timeoutMs, deferred, priority))
         return deferred.await()
     }
 
@@ -23,12 +29,16 @@ class DeviceCommandRepositoryImpl(
     }
 
     override suspend fun uploadFile(clientId: String, remotePath: String, localFile: File, onProgress: ((Long, Long) -> Unit)?): Boolean {
-        val session = currentSession(clientId) ?: return false
-        return session.uploadFile(remotePath, localFile, onProgress)
+        if (currentSession(clientId) == null) return false
+        val deferred = CompletableDeferred<Boolean>()
+        networkThread.post(NetCommand.UploadFile(clientId, remotePath, localFile, onProgress, deferred))
+        return deferred.await()
     }
 
     override suspend fun downloadFile(clientId: String, remotePath: String, targetFile: File, onProgress: ((Long, Long) -> Unit)?): ClientSession.DownloadResult {
-        val session = currentSession(clientId) ?: return ClientSession.DownloadResult.Failed
-        return session.downloadFile(remotePath, targetFile, onProgress)
+        if (currentSession(clientId) == null) return ClientSession.DownloadResult.Failed
+        val deferred = CompletableDeferred<ClientSession.DownloadResult>()
+        networkThread.post(NetCommand.DownloadFile(clientId, remotePath, targetFile, onProgress, deferred))
+        return deferred.await()
     }
 }

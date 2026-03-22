@@ -10,6 +10,7 @@ import com.kgapp.frpshellpro.core.FrpCommand
 import com.kgapp.frpshellpro.core.FrpEvent
 import com.kgapp.frpshellpro.core.FrpManagerThread
 import com.kgapp.frpshellpro.core.NetCommand
+import com.kgapp.frpshellpro.core.NetCommandPriority
 import com.kgapp.frpshellpro.core.NetEvent
 import com.kgapp.frpshellpro.core.NetworkThread
 import com.kgapp.frpshellpro.data.repository.DeviceCommandRepositoryImpl
@@ -34,9 +35,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.net.URL
 import java.security.MessageDigest
+import java.util.Collections
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -59,6 +63,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var captureJob: kotlinx.coroutines.Job? = null
     private val shellSendScope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
     private val shellSendChannel = Channel<ShellSendRequest>(Channel.UNLIMITED)
+    private val runtimeRefreshSemaphore = Semaphore(MAX_RUNTIME_REFRESH_CONCURRENCY)
+    private val refreshingClientIds = Collections.synchronizedSet(mutableSetOf<String>())
 
     init {
         logInit(MODULE_UI, "MainViewModel 初始化开始")
@@ -116,7 +122,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     display.batteryPercent == "--" ||
                                     display.uptimeHm == "--"
                                 if (needsRefresh) {
-                                    launch(Dispatchers.IO) { refreshClientRuntimeInfo(id) }
+                                    requestRuntimeRefresh(id)
                                 }
                             }
 
@@ -188,20 +194,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun refreshClientRuntimeInfo(clientId: String) {
         val boardCode = extractFirstCommandValue(
-            runManagedCommand(clientId, "getprop ro.boot.serialno")
+            runManagedCommand(
+                clientId,
+                "getprop ro.boot.serialno",
+                priority = NetCommandPriority.BACKGROUND
+            )
         )
             ?.takeIf { it.isNotBlank() }
             ?: "unknown"
         val modelName = extractFirstCommandValue(
-            runManagedCommand(clientId, "getprop ro.product.model")
+            runManagedCommand(
+                clientId,
+                "getprop ro.product.model",
+                priority = NetCommandPriority.BACKGROUND
+            )
         )
             ?.takeIf { it.isNotBlank() }
             ?: "unknown"
         val batteryPercent = formatBatteryPercent(
-            runManagedCommand(clientId, "cat /sys/class/power_supply/battery/capacity")
+            runManagedCommand(
+                clientId,
+                "cat /sys/class/power_supply/battery/capacity",
+                priority = NetCommandPriority.BACKGROUND
+            )
         )
         val uptimeHm = formatUptimeHm(
-            runManagedCommand(clientId, "cat /proc/uptime")
+            runManagedCommand(
+                clientId,
+                "cat /proc/uptime",
+                priority = NetCommandPriority.BACKGROUND
+            )
         )
 
         _uiState.update { state ->
@@ -221,6 +243,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 boardCodeByClientId = boardCodeMap,
                 clientModels = state.clientModels + (clientId to mergedInfo)
             )
+        }
+    }
+
+    private fun requestRuntimeRefresh(clientId: String) {
+        if (!refreshingClientIds.add(clientId)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runtimeRefreshSemaphore.withPermit {
+                try {
+                    refreshClientRuntimeInfo(clientId)
+                } finally {
+                    refreshingClientIds.remove(clientId)
+                }
+            }
         }
     }
 
@@ -1898,8 +1933,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun currentSession(clientId: String): ClientSession? = networkThread.currentSession(clientId)
 
-    private suspend fun runManagedCommand(clientId: String, command: String, timeoutMs: Long = 10_000L): String? {
-        return runCatching { shellUseCase.runManagedCommand(clientId, command, timeoutMs) }
+    private suspend fun runManagedCommand(
+        clientId: String,
+        command: String,
+        timeoutMs: Long = 10_000L,
+        priority: NetCommandPriority = NetCommandPriority.BACKGROUND
+    ): String? {
+        return runCatching { shellUseCase.runManagedCommand(clientId, command, timeoutMs, priority) }
             .getOrNull()
     }
 
@@ -2032,6 +2072,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val MODULE_UI = "UI"
         private const val MODULE_NETWORK = "Network"
         private const val MODULE_FRP = "FrpManager"
+        private const val MAX_RUNTIME_REFRESH_CONCURRENCY = 3
         private const val DEFAULT_LOCAL_PORT = 23231
         private const val MIN_FONT_SIZE_SP = 12f
         private const val MAX_FONT_SIZE_SP = 24f

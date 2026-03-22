@@ -27,6 +27,7 @@ object TcpServer {
     private const val PAIR_TIMEOUT_MS      = 15_000L
     private const val ORPHAN_CLEANUP_MS    = 20_000L
     private const val SOCK_IO_TIMEOUT_MS   = 30_000
+    private const val MAX_CLIENT_BATCH_SIZE = 3
 
     // 协议常量
     private const val TYPE_HANDSHAKE:     Byte = 0x00
@@ -161,6 +162,18 @@ object TcpServer {
             return
         }
 
+        val clientId = "client-$token"
+        if (sessions.containsKey(clientId)) {
+            logWarn("[TCP] 已存在同 token 会话，拒绝重复连接 token=$token isCmd=$isCmd")
+            runCatching { socket.close() }
+            return
+        }
+        if (shouldRejectByQueueLimit(token)) {
+            logWarn("[TCP] 客户端队列已满(最多$MAX_CLIENT_BATCH_SIZE)，拒绝连接 token=$token isCmd=$isCmd")
+            runCatching { socket.close() }
+            return
+        }
+
         // 握手成功，回 ACK，恢复正常 IO 超时
         try {
             conn.sendFrame(TYPE_HANDSHAKE_ACK, FLAG_NONE, ByteArray(0))
@@ -195,6 +208,12 @@ object TcpServer {
     // --------------------------------------------------------
     private fun bindClient(token: String, cmdPc: PendingConn, filePc: PendingConn) {
         val id = "client-$token"
+        if (sessions.containsKey(id)) {
+            logWarn("[TCP] bindClient 检测到重复会话，拒绝连接 id=$id")
+            runCatching { cmdPc.socket.close() }
+            runCatching { filePc.socket.close() }
+            return
+        }
         val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val session = ClientSession(
             id         = id,
@@ -239,6 +258,22 @@ object TcpServer {
             _clientIds.value = sessions.keys.sorted()
             logWarn("[TCP] 客户端已断开: $id, reason=$reason")
         }
+    }
+
+    private fun shouldRejectByQueueLimit(token: String): Boolean {
+        if (pendingCmd.containsKey(token) || pendingFile.containsKey(token)) {
+            return false
+        }
+        return activeOrPendingClientCount() >= MAX_CLIENT_BATCH_SIZE
+    }
+
+    private fun activeOrPendingClientCount(): Int {
+        val activeTokens = sessions.keys.mapTo(mutableSetOf()) { id ->
+            id.removePrefix("client-")
+        }
+        activeTokens += pendingCmd.keys
+        activeTokens += pendingFile.keys
+        return activeTokens.size
     }
 
     private fun logWarn(message: String) {

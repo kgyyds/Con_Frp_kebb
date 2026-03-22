@@ -1,4 +1,4 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -14,8 +14,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -40,16 +38,19 @@ import androidx.compose.ui.unit.dp
 fun FileManagerScreen(
     currentPath: String,
     files: List<RemoteFileItem>,
+    errorMessage: String?,
     contentPadding: PaddingValues,
     onRefresh: () -> Unit,
     onBackDirectory: () -> Unit,
     onOpenFile: (RemoteFileItem) -> Unit,
     onEditFile: (RemoteFileItem) -> Unit,
     onDownloadFile: (RemoteFileItem) -> Unit,
+    onLargeFileUpload: (RemoteFileItem) -> Unit,
     onUploadFile: () -> Unit,
     onRename: (RemoteFileItem, String) -> Unit,
     onChmod: (RemoteFileItem, String) -> Unit,
     onDelete: (RemoteFileItem) -> Unit,
+    onCompress: (RemoteFileItem) -> Unit,
     transferVisible: Boolean,
     transferTitle: String,
     transferDone: Long,
@@ -70,6 +71,10 @@ fun FileManagerScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(text = "当前路径：$currentPath", style = MaterialTheme.typography.titleSmall)
+
+        errorMessage?.let {
+            Text(text = it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onBackDirectory, enabled = currentPath != "/") {
@@ -99,7 +104,7 @@ fun FileManagerScreen(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            items(files, key = { "${it.type}:${it.name}" }) { item ->
+            items(files, key = { it.path }) { item ->
                 Box {
                     Row(
                         modifier = Modifier
@@ -107,6 +112,8 @@ fun FileManagerScreen(
                             .combinedClickable(
                                 onClick = {
                                     if (item.type == RemoteFileType.Directory) {
+                                        onOpenFile(item)
+                                    } else if (isImageFileName(item.name)) {
                                         onOpenFile(item)
                                     } else {
                                         editTarget = item
@@ -120,8 +127,6 @@ fun FileManagerScreen(
                         Icon(
                             imageVector = when (item.type) {
                                 RemoteFileType.Directory -> Icons.Outlined.Folder
-                                RemoteFileType.Executable -> Icons.Outlined.Memory
-                                RemoteFileType.Symlink -> Icons.Outlined.Link
                                 RemoteFileType.File -> Icons.AutoMirrored.Outlined.Article
                             },
                             contentDescription = null
@@ -142,9 +147,25 @@ fun FileManagerScreen(
                                 }
                             )
                             DropdownMenuItem(
+                                text = { Text("大文件上传") },
+                                onClick = {
+                                    onLargeFileUpload(item)
+                                    actionItem = null
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("编辑") },
                                 onClick = {
                                     editTarget = item
+                                    actionItem = null
+                                }
+                            )
+                        }
+                        if (item.type == RemoteFileType.Directory) {
+                            DropdownMenuItem(
+                                text = { Text("压缩") },
+                                onClick = {
+                                    onCompress(item)
                                     actionItem = null
                                 }
                             )
@@ -278,4 +299,14 @@ fun FileManagerScreen(
         )
     }
 
+}
+
+private fun isImageFileName(fileName: String): Boolean {
+    val lowerName = fileName.lowercase()
+    return lowerName.endsWith(".jpg") ||
+        lowerName.endsWith(".jpeg") ||
+        lowerName.endsWith(".png") ||
+        lowerName.endsWith(".webp") ||
+        lowerName.endsWith(".gif") ||
+        lowerName.endsWith(".bmp")
 }

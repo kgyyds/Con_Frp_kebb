@@ -6,29 +6,34 @@ plugins {
 }
 
 android {
-    namespace = "com.kgapp.frpshell"
+    namespace = "com.kgapp.frpshellpro"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.kgapp.frpshell"
+        applicationId = "com.kgapp.frpshellpro"
         minSdk = 26
         targetSdk = 34
 
-        versionCode = 200
-        versionName = "2.0.0"
+        versionCode = 310
+        versionName = "3.1.0"
 
         ndk {
             abiFilters += "arm64-v8a"
         }
     }
 
+    val githubWorkspace = System.getenv("GITHUB_WORKSPACE")
+    val releaseKeystorePath = githubWorkspace?.let { "$it/release.jks" }
+    val releaseKeystoreExists = releaseKeystorePath?.let { file(it).exists() } == true
+
     signingConfigs {
-        create("release") {
-            val keystorePath = System.getenv("GITHUB_WORKSPACE") + "/release.jks"
-            storeFile = file(keystorePath)
-            storePassword = System.getenv("SIGNING_STORE_PASSWORD")
-            keyAlias = System.getenv("SIGNING_KEY_ALIAS")
-            keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+        if (releaseKeystoreExists) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS")
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
+            }
         }
     }
 
@@ -39,7 +44,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release") //KotlinDsl写法。
+            signingConfig = signingConfigs.findByName("release") // CI 提供 keystore 时启用 release 签名。
         }
         getByName("debug") {
             isMinifyEnabled = false
@@ -96,6 +101,8 @@ dependencies {
 
     // Coil
     implementation("io.coil-kt:coil-compose:2.6.0")
+
+    implementation("org.java-websocket:Java-WebSocket:1.5.6")
 
     // Debug tools
     debugImplementation("androidx.compose.ui:ui-tooling")

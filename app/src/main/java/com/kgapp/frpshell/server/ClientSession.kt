@@ -1,267 +1,559 @@
-package com.kgapp.frpshell.server
 
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+package com.kgapp.frpshellpro.server
+
+import android.util.Log
+import com.kgapp.frpshellpro.frp.FrpLogBus
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
-import java.io.File
-import java.io.FileOutputStream
+import org.json.JSONObject
+import java.io.*
 import java.net.Socket
+import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.charset.StandardCharsets
-import java.util.Base64
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.zip.CRC32
 
+// ============================================================
+//  协议常量（与 C++ 端严格对齐）
+// ============================================================
+private const val MAGIC: Int           = 0x52535448   // "RSTH"
+private const val MAX_PAYLOAD: Int     = 4 * 1024 * 1024
+private const val HEARTBEAT_SEC: Long  = 5_000L
+private const val HEARTBEAT_TIMEOUT: Long = 15_000L
+
+private const val TYPE_HEARTBEAT:     Byte = 0x01
+private const val TYPE_HEARTBEAT_ACK: Byte = 0x02
+private const val TYPE_ACK:           Byte = 0x03
+private const val TYPE_ERROR:         Byte = 0x04
+
+private const val TYPE_CMD_REQ:       Byte = 0x10
+private const val TYPE_CMD_RESP:      Byte = 0x11
+
+private const val TYPE_FILE_OPEN:     Byte = 0x20
+private const val TYPE_FILE_CHUNK:    Byte = 0x21
+private const val TYPE_FILE_CLOSE:    Byte = 0x22
+private const val TYPE_FILE_GET:      Byte = 0x23
+
+private const val FLAG_NONE:     Byte = 0x00
+private const val FLAG_NEED_ACK: Byte = 0x01
+
+// ============================================================
+//  帧结构
+//  | 4B magic | 4B seq | 1B type | 1B flags | 2B reserved |
+//  | 4B payload_len | payload | 4B crc32 |
+//  header = 16 bytes
+// ============================================================
+private const val HEADER_SIZE = 16
+
+data class Frame(
+    val seq: Long,
+    val type: Byte,
+    val flags: Byte,
+    val payload: ByteArray
+)
+
+// ============================================================
+//  CRC32 工具（Java 内置，与 C++ 查表结果一致）
+// ============================================================
+private fun crc32Of(vararg blocks: ByteArray): Long {
+    val crc = CRC32()
+    blocks.forEach { crc.update(it) }
+    return crc.value  // unsigned 32-bit as Long
+}
+
+// ============================================================
+//  Connection：单条 TCP 连接上的帧收发（线程安全）
+// ============================================================
+class Connection(private val socket: Socket) {
+    private val input  = BufferedInputStream(socket.getInputStream())
+    private val output = BufferedOutputStream(socket.getOutputStream())
+    private val writeMu = Mutex()
+    private var txSeq: Long = 0
+
+    val isOpen: Boolean get() = !socket.isClosed && socket.isConnected
+
+    suspend fun sendFrame(type: Byte, flags: Byte, payload: ByteArray = ByteArray(0)): Boolean {
+        if (!isOpen) return false
+        if (payload.size > MAX_PAYLOAD) return false
+        return writeMu.withLock {
+            runCatching {
+                val seq = txSeq++
+                val header = ByteBuffer.allocate(HEADER_SIZE).order(ByteOrder.BIG_ENDIAN).apply {
+                    putInt(MAGIC)
+                    putInt(seq.toInt())
+                    put(type)
+                    put(flags)
+                    putShort(0)                  // reserved
+                    putInt(payload.size)
+                }.array()
+
+                // CRC 覆盖 header + payload
+                val crc = crc32Of(header, payload)
+                val crcBytes = ByteBuffer.allocate(4)
+                    .order(ByteOrder.BIG_ENDIAN)
+                    .putInt(crc.toInt())
+                    .array()
+
+                output.write(header)
+                if (payload.isNotEmpty()) output.write(payload)
+                output.write(crcBytes)
+                output.flush()
+                true
+            }.getOrElse { false }
+        }
+    }
+
+    // 阻塞读取一帧（在 IO 线程调用）
+    @Throws(IOException::class, SocketTimeoutException::class, ConnectionProtocolException::class)
+    fun recvFrame(): Frame {
+        val headerBuf = readExact(HEADER_SIZE)
+        val bb = ByteBuffer.wrap(headerBuf).order(ByteOrder.BIG_ENDIAN)
+
+        val magic      = bb.int
+        val seq        = bb.int.toLong() and 0xFFFFFFFFL
+        val type       = bb.get()
+        val flags      = bb.get()
+        /*reserved*/     bb.short
+        val payloadLen = bb.int
+
+        if (magic != MAGIC) {
+            throw ConnectionProtocolException("魔数不匹配: 0x${magic.toString(16)}")
+        }
+        if (payloadLen < 0 || payloadLen > MAX_PAYLOAD) {
+            throw ConnectionProtocolException("payload 超限: $payloadLen")
+        }
+
+        val payload = if (payloadLen > 0) readExact(payloadLen) else ByteArray(0)
+        val crcBuf  = readExact(4)
+        val recvCrc = ByteBuffer.wrap(crcBuf).order(ByteOrder.BIG_ENDIAN).int.toLong() and 0xFFFFFFFFL
+
+        // 校验 CRC（用同样的 header 原始字节）
+        val calcCrc = crc32Of(headerBuf, payload)
+        if (calcCrc != recvCrc) {
+            throw ConnectionProtocolException("CRC 校验失败，丢弃帧 seq=$seq")
+        }
+
+        return Frame(seq, type, flags, payload)
+    }
+
+    fun close() = runCatching { socket.close() }
+
+    private fun readExact(len: Int): ByteArray {
+        val buf = ByteArray(len)
+        var off = 0
+        while (off < len) {
+            val n = input.read(buf, off, len - off)
+            if (n <= 0) throw EOFException("stream closed")
+            off += n
+        }
+        return buf
+    }
+}
+
+class ConnectionProtocolException(message: String) : IOException(message)
+
+// ============================================================
+//  ClientSession（命令通道）
+// ============================================================
 class ClientSession(
     val id: String,
-    private val socket: Socket,
+    cmdSocket: Socket,
+    private val fileSocket: Socket,          // 独立文件通道
     private val scope: CoroutineScope,
-    private val onClosed: (String) -> Unit
+    private val onClosed: (String, String) -> Unit
 ) {
+    private val cmdConn  = Connection(cmdSocket)
+    private val fileConn = Connection(fileSocket)
+
     private val _output = MutableStateFlow("")
     val output: StateFlow<String> = _output.asStateFlow()
 
-    private var recvJob: Job? = null
-    private val closed = AtomicBoolean(false)
-
-    private val sendMutex = Mutex()
-    private val managedCommandMutex = Mutex()
-    private val transferMutex = Mutex()
-    private val transferStateMutex = Mutex()
+    private val _shellEvents = MutableSharedFlow<ShellEvent>(extraBufferCapacity = 256)
+    val shellEvents: SharedFlow<ShellEvent> = _shellEvents.asSharedFlow()
 
     @Volatile
-    private var activeCapture: CaptureState? = null
+    var registrationInfo: RegistrationInfo? = RegistrationInfo(id, id, "unknown")
+        private set
+
+    private val closed       = AtomicBoolean(false)
+    private val cmdMutex     = Mutex()           // 保证命令串行
+    private val lastPongMs   = AtomicLong(System.currentTimeMillis())
+
+    // 命令结果通道
+    private val cmdRespChannel = Channel<String>(Channel.UNLIMITED)
 
     @Volatile
-    private var receiveState: ReceiveState = ReceiveState.Idle
+    var lastTransferError: TransferError? = null
+        private set
 
-    @Volatile
-    private var transferContext: TransferContext? = null
-
+    // --------------------------------------------------------
+    //  启动
+    // --------------------------------------------------------
     fun start() {
-        startReceiver()
+        appendOutput("[connected] $id")
+        scope.launch(Dispatchers.IO) { runCmdReadLoop() }
+        scope.launch(Dispatchers.IO) { runFileReadLoop() }
+        scope.launch(Dispatchers.IO) { runHeartbeat() }
     }
 
+    // --------------------------------------------------------
+    //  命令执行
+    // --------------------------------------------------------
     fun send(command: String) {
         if (command.isBlank()) return
         scope.launch(Dispatchers.IO) {
-            if (!isActive) return@launch
-            writeLineCommand(command, appendErrorToOutput = true)
+            val result = runManagedCommand(command)
+            if (!result.isNullOrBlank()) {
+                result.lines().forEach { line ->
+                    if (line.isBlank()) return@forEach
+                    appendOutput(line)
+                    _shellEvents.tryEmit(ShellEvent.OutputLine(line))
+                }
+            }
+            _shellEvents.tryEmit(ShellEvent.CommandEnd)
         }
     }
 
-    suspend fun runManagedCommand(command: String, timeoutMs: Long = DEFAULT_MANAGED_TIMEOUT_MS): String? {
-        if (command.isBlank()) return ""
-
-        return managedCommandMutex.withLock {
-            val token = UUID.randomUUID().toString().replace("-", "")
-            val beginMarker = "__FRPSHELL_BEGIN_${token}__"
-            val endMarker = "__FRPSHELL_END_${token}__"
-            val deferred = CompletableDeferred<String?>()
-
-            activeCapture = CaptureState(beginMarker = beginMarker, endMarker = endMarker, result = deferred)
-            val wrapped = "echo '$beginMarker'; $command; echo '$endMarker'"
-            val sent = writeLineCommand(wrapped, appendErrorToOutput = false)
-            if (!sent) {
-                activeCapture = null
-                deferred.complete(null)
-                return@withLock null
-            }
-
-            withTimeoutOrNull(timeoutMs) { deferred.await() }.also {
-                if (it == null) activeCapture = null
-            }
-        }
+    suspend fun runManagedCommand(
+        command: String,
+        timeoutMs: Long = DEFAULT_CMD_TIMEOUT_MS
+    ): String? = cmdMutex.withLock {
+        if (command.isBlank()) return@withLock ""
+        if (!cmdConn.isOpen) return@withLock "[ERROR] connection closed"
+        runCatching {
+            cmdConn.sendFrame(TYPE_CMD_REQ, FLAG_NONE, command.toByteArray())
+            withTimeoutOrNull(timeoutMs) { cmdRespChannel.receive() }
+                ?: "[ERROR] command timeout"
+        }.getOrElse { "[ERROR] ${it.message}" }
     }
 
-    suspend fun uploadFile(remotePath: String, localFile: File, onProgress: ((Long, Long) -> Unit)? = null): Boolean {
-        val safeRemotePath = sanitizeRemotePath(remotePath) ?: return false
+    // --------------------------------------------------------
+    //  文件上传（服务端 → 客户端）：走文件通道，分片+CRC
+    // --------------------------------------------------------
+    suspend fun uploadFile(
+        remotePath: String,
+        localFile: File,
+        onProgress: ((Long, Long) -> Unit)? = null
+    ): Boolean {
+        val safePath = sanitizeRemotePath(remotePath) ?: return false
         if (!localFile.exists() || !localFile.isFile) return false
 
-        return transferMutex.withLock {
-            val total = localFile.length()
-            onProgress?.invoke(0L, total)
+        return runCatching {
+            lastTransferError = null
+            val total     = localFile.length()
+            val chunkSize = 65536
+            val chunks    = ((total + chunkSize - 1) / chunkSize).toInt()
 
-            val escapedPath = shellEscape(safeRemotePath)
-            val truncateResult = runManagedCommand(": > '$escapedPath'", timeoutMs = DEFAULT_MANAGED_TIMEOUT_MS)
-            if (truncateResult == null) return@withLock false
+            // FILE_OPEN: path\0 + totalSize(8B) + totalChunks(4B)
+            val pathBytes = safePath.toByteArray()
+            val openPayload = ByteBuffer.allocate(pathBytes.size + 1 + 8 + 4)
+                .put(pathBytes).put(0)
+                .order(ByteOrder.BIG_ENDIAN)
+                .putLong(total)
+                .putInt(chunks)
+                .array()
+            fileConn.sendFrame(TYPE_FILE_OPEN, FLAG_NONE, openPayload)
 
-            var sent = 0L
-            val buffer = ByteArray(UPLOAD_RAW_CHUNK_SIZE)
-            localFile.inputStream().use { input ->
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    val encoded = Base64.getEncoder().encodeToString(buffer.copyOf(read))
-                    val ok = runManagedCommand("printf '%s' '$encoded' | base64 -d >> '$escapedPath'", timeoutMs = TRANSFER_TIMEOUT_MS)
-                    if (ok == null) return@withLock false
-                    sent += read
+            onProgress?.invoke(0, total)
+            val crc32 = CRC32()
+            var sent  = 0L
+            var idx   = 0
+
+            localFile.inputStream().buffered().use { fis ->
+                val buf = ByteArray(chunkSize)
+                var n: Int
+                while (fis.read(buf).also { n = it } > 0) {
+                    crc32.update(buf, 0, n)
+                    // chunk payload: idx(4B) + data
+                    val chunkPayload = ByteBuffer.allocate(4 + n)
+                        .order(ByteOrder.BIG_ENDIAN)
+                        .putInt(idx++)
+                        .put(buf, 0, n)
+                        .array()
+                    fileConn.sendFrame(TYPE_FILE_CHUNK, FLAG_NONE, chunkPayload)
+                    sent += n
                     onProgress?.invoke(sent, total)
                 }
             }
 
-            val verify = runManagedCommand("wc -c < '$escapedPath'", timeoutMs = DEFAULT_MANAGED_TIMEOUT_MS)
-                ?.lineSequence()
-                ?.map { it.trim() }
-                ?.firstOrNull { it.isNotBlank() }
-                ?.toLongOrNull()
+            // FILE_CLOSE: crc32(4B)
+            val closePayload = ByteBuffer.allocate(4)
+                .order(ByteOrder.BIG_ENDIAN)
+                .putInt(crc32.value.toInt())
+                .array()
+            fileConn.sendFrame(TYPE_FILE_CLOSE, FLAG_NONE, closePayload)
 
-            verify == total
+            Log.d(LOG_TAG, "[upload] 完成: $safePath ($sent bytes, $idx chunks)")
+            true
+        }.getOrElse {
+            reportTransferError(TransferErrorCode.IO_INTERRUPTED, it.message ?: "upload failed")
+            false
         }
     }
 
-    suspend fun downloadFile(remotePath: String, targetFile: File, onProgress: ((Long, Long) -> Unit)? = null): DownloadResult {
-        val safeRemotePath = sanitizeRemotePath(remotePath) ?: return DownloadResult.Failed
-        
-        return transferMutex.withLock {
-            val deferred = CompletableDeferred<DownloadResult>()
-            val tmpFile = File(targetFile.parentFile ?: File("."), "${targetFile.name}.part")
-            tmpFile.parentFile?.mkdirs()
+    // --------------------------------------------------------
+    //  文件下载（客户端 → 服务端）：发 FILE_GET，接收分片
+    // --------------------------------------------------------
+    suspend fun downloadFile(
+        remotePath: String,
+        targetFile: File,
+        onProgress: ((Long, Long) -> Unit)? = null
+    ): DownloadResult {
+        val safePath = sanitizeRemotePath(remotePath) ?: return DownloadResult.Failed
+        lastTransferError = null
 
-            // Setup state before sending command
-            val ctx = TransferContext(
-                targetFile = targetFile,
-                tmpFile = tmpFile,
-                result = deferred,
-                onProgress = onProgress
-            )
-            transferContext = ctx
-            receiveState = ReceiveState.DownloadHeader
+        return runCatching {
+            fileConn.sendFrame(TYPE_FILE_GET, FLAG_NONE, safePath.toByteArray())
 
-            // Send command: download <path>
-            // Note: We don't use runManagedCommand because we need to hijack the receiver stream immediately
-            val cmd = "download ${shellEscape(safeRemotePath)}"
-            val sent = writeLineCommand(cmd, appendErrorToOutput = true)
-            if (!sent) {
-                resetTransferState("send command failed", cleanupFile = true)
-                return@withLock DownloadResult.Failed
-            }
-
-            // Wait for completion with timeout
-            withTimeoutOrNull(TRANSFER_TIMEOUT_MS) {
-                deferred.await()
+            // 等待 FILE_OPEN
+            val openResult = withTimeoutOrNull(DOWNLOAD_IDLE_TIMEOUT_MS) {
+                fileRespChannel.receive()
             } ?: run {
-                resetTransferState("timeout", cleanupFile = true)
-                DownloadResult.Failed
+                reportTransferError(TransferErrorCode.TIMEOUT, "等待 FILE_OPEN 超时")
+                return@runCatching DownloadResult.Failed
             }
-        }
-    }
+            if (openResult !is FileMsg.Open) return@runCatching DownloadResult.NotFound
 
-    fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        runCatching { socket.close() }
-        recvJob?.cancel()
-        scope.cancel()
-        onClosed(id)
-    }
+            val totalSize   = openResult.totalSize
+            val totalChunks = openResult.totalChunks
+            onProgress?.invoke(0, totalSize)
 
-    private fun startReceiver() {
-        recvJob = scope.launch(Dispatchers.IO) {
-            runCatching {
-                val input = socket.getInputStream()
-                val lineAccumulator = LineAccumulator(
-                    maxLineLength = MAX_LINE,
-                    onLineTooLong = { _output.value += "[line dropped] command too long\n" }
-                )
-                val temp = ByteArray(FILE_CHUNK_SIZE)
+            targetFile.parentFile?.mkdirs()
+            val crc32 = CRC32()
+            var received = 0L
 
-                while (isActive) {
-                    val read = input.read(temp)
-                    if (read <= 0) break
-                    var offset = 0
-                    while (offset < read) {
-                        when (receiveState) {
-                            ReceiveState.Idle -> {
-                                val consumed = lineAccumulator.append(temp, offset, read - offset)
-                                offset += consumed
-                                while (true) {
-                                    val line = lineAccumulator.readLine() ?: break
-                                    if (!isExecutableLine(line)) {
-                                        continue
-                                    }
-                                    if (!consumeManagedLine(line)) {
-                                        _output.value += "$line\n"
-                                    }
-                                }
-                            }
-
-                            ReceiveState.DownloadHeader -> {
-                                offset += consumeDownloadHeader(temp, offset, read - offset)
-                            }
-
-                            ReceiveState.DownloadBody -> {
-                                offset += consumeDownloadBody(temp, offset, read - offset)
-                            }
-                        }
+            targetFile.outputStream().buffered().use { fos ->
+                repeat(totalChunks) {
+                    val chunk = withTimeoutOrNull(DOWNLOAD_IDLE_TIMEOUT_MS) {
+                        fileRespChannel.receive()
+                    } ?: run {
+                        reportTransferError(TransferErrorCode.TIMEOUT, "分片接收超时")
+                        return@runCatching DownloadResult.Failed
                     }
-                }
-            }.onFailure {
-                resetTransferState(it.message ?: "receiver error", cleanupFile = true)
-                if (!closed.get()) {
-                    _output.value += "[session closed] ${it.message ?: "unknown"}\n"
+                    if (chunk !is FileMsg.Chunk) return@runCatching DownloadResult.Failed
+                    crc32.update(chunk.data)
+                    fos.write(chunk.data)
+                    received += chunk.data.size
+                    onProgress?.invoke(received, totalSize)
                 }
             }
-            if (!closed.get()) close()
-        }
-    }
 
-    private suspend fun writeLineCommand(command: String, appendErrorToOutput: Boolean): Boolean {
-        return sendMutex.withLock {
-            runCatching {
-                socket.getOutputStream().bufferedWriter().apply {
-                    write(command)
-                    newLine()
-                    flush()
-                }
-            }.onFailure {
-                if (appendErrorToOutput) {
-                    _output.value += "[send failed] ${it.message ?: "unknown"}\n"
-                }
-            }.isSuccess
-        }
-    }
-
-    private fun consumeManagedLine(line: String): Boolean {
-        val capture = activeCapture ?: return false
-
-        if (line == CLIENT_COMMAND_END_MARKER) {
-            return true
-        }
-
-        if (!capture.started) {
-            if (line == capture.beginMarker) {
-                capture.started = true
-                return true
+            // 等待 FILE_CLOSE
+            val closeMsg = withTimeoutOrNull(DOWNLOAD_IDLE_TIMEOUT_MS) {
+                fileRespChannel.receive()
             }
-            return false
-        }
+            if (closeMsg is FileMsg.Close) {
+                if (crc32.value != closeMsg.crc32) {
+                    reportTransferError(TransferErrorCode.CRC_MISMATCH, "文件 CRC 不匹配")
+                    targetFile.delete()
+                    return@runCatching DownloadResult.Failed
+                }
+            }
 
-        if (line == capture.endMarker) {
-            activeCapture = null
-            capture.result.complete(capture.buffer.toString())
-            return true
+            onProgress?.invoke(received, received)
+            Log.d(LOG_TAG, "[download] 完成: $safePath ($received bytes)")
+            DownloadResult.Success
+        }.getOrElse {
+            reportTransferError(TransferErrorCode.IO_INTERRUPTED, it.message ?: "download failed")
+            DownloadResult.Failed
         }
-
-        capture.buffer.append(line).append('\n')
-        return true
     }
 
-    private fun isExecutableLine(line: String): Boolean {
-        if (line.isBlank()) return false
-        if (line.length > MAX_LINE) return false
-        return line.none { it == '\u0000' }
+    // --------------------------------------------------------
+    //  文件消息内部通道（文件读取循环 → downloadFile）
+    // --------------------------------------------------------
+    private val fileRespChannel = Channel<FileMsg>(Channel.UNLIMITED)
+
+    sealed interface FileMsg {
+        data class Open(val totalSize: Long, val totalChunks: Int) : FileMsg
+        data class Chunk(val index: Int, val data: ByteArray) : FileMsg
+        data class Close(val crc32: Long) : FileMsg
+        data object Error : FileMsg
     }
+
+    // --------------------------------------------------------
+    //  其他工具方法
+    // --------------------------------------------------------
+    suspend fun listFiles(path: String): ListFilesResult {
+        val safePath = sanitizeRemotePath(path) ?: return ListFilesResult.Failed("invalid path")
+        val result = runManagedCommand("ls -la ${shellEscape(safePath)}")
+            ?: return ListFilesResult.Failed("empty response")
+        if (result.startsWith("[ERROR]")) return ListFilesResult.Error(result)
+
+        val items = result.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !it.startsWith("total") && !it.startsWith("ls:") }
+            .mapNotNull { line ->
+                val parts = line.split(Regex("\\s+"), limit = 9)
+                if (parts.size < 8) return@mapNotNull null  // 至少8列才处理
+                val perms = parts[0]
+                val name  = parts.last().trim()  // 取最后一列，兼容8列/9列格式
+                if (name == "." || name == "..") return@mapNotNull null
+                val isDir = perms.firstOrNull() == 'd'
+                val full  = if (safePath == "/") "/$name" else "$safePath/$name"
+                RemoteFileEntry(path = full, file = !isDir)
+            }.toList()
+        return ListFilesResult.Success(items)
+    }
+
+    suspend fun requestDeviceInfo(timeoutMs: Long = 5_000L): JSONObject {
+        val uname = runManagedCommand("uname -a", timeoutMs) ?: "unknown"
+        return JSONObject().apply {
+            put("type", "info")
+            put("device", id)
+            put("uname", uname)
+        }
+    }
+
+    fun close(reason: String = "manual close", cause: Throwable? = null) {
+        if (!closed.compareAndSet(false, true)) return
+        cmdConn.close()
+        fileConn.close()
+        cmdRespChannel.close()
+        fileRespChannel.close()
+        scope.cancel()
+        val detail = cause?.message?.let { ": $it" } ?: ""
+        onClosed(id, "$reason$detail")
+    }
+
+    // --------------------------------------------------------
+    //  内部：命令通道读取循环
+    // --------------------------------------------------------
+    private suspend fun runCmdReadLoop() {
+        try {
+            while (scope.isActive && cmdConn.isOpen) {
+                val frame = withContext(Dispatchers.IO) { cmdConn.recvFrame() }
+                lastPongMs.set(System.currentTimeMillis())
+
+                // 需要 ACK 的帧，先回复
+                if (frame.flags == FLAG_NEED_ACK) {
+                    val ackPayload = ByteBuffer.allocate(4)
+                        .order(ByteOrder.BIG_ENDIAN)
+                        .putInt(frame.seq.toInt())
+                        .array()
+                    cmdConn.sendFrame(TYPE_ACK, FLAG_NONE, ackPayload)
+                }
+
+                when (frame.type) {
+                    TYPE_HEARTBEAT -> {
+                        cmdConn.sendFrame(TYPE_HEARTBEAT_ACK, FLAG_NONE)
+                    }
+                    TYPE_HEARTBEAT_ACK -> {
+                        // pong 时间已在上面更新
+                    }
+                    TYPE_CMD_RESP -> {
+                        val text = frame.payload.toString(Charsets.UTF_8)
+                        cmdRespChannel.trySend(text)
+                    }
+                    TYPE_ACK -> {
+                        // 服务端目前不需要处理客户端的 ACK，预留扩展
+                    }
+                    TYPE_ERROR -> {
+                        val msg = frame.payload.toString(Charsets.UTF_8)
+                        logWarn("[ClientSession] 客户端报错: $msg")
+                        cmdRespChannel.trySend("[ERROR] $msg")
+                    }
+                    else -> logWarn("[ClientSession] cmd 通道未知类型: 0x${frame.type.toUByte().toString(16)}")
+                }
+            }
+        } catch (e: Exception) {
+            logError("[ClientSession] cmd 读取循环异常", e)
+        } finally {
+            close("cmd read loop end")
+        }
+    }
+
+    // --------------------------------------------------------
+    //  内部：文件通道读取循环
+    // --------------------------------------------------------
+    private suspend fun runFileReadLoop() {
+        try {
+            while (scope.isActive && fileConn.isOpen) {
+                val frame = try {
+                    withContext(Dispatchers.IO) { fileConn.recvFrame() }
+                } catch (e: SocketTimeoutException) {
+                    Log.d(LOG_TAG, "[file-loop] read timeout, keep alive")
+                    continue
+                } catch (e: EOFException) {
+                    Log.i(LOG_TAG, "[file-loop] eof, peer closed: ${e.message}")
+                    break
+                } catch (e: SocketException) {
+                    Log.i(LOG_TAG, "[file-loop] socket closed: ${e.message}")
+                    break
+                } catch (e: ConnectionProtocolException) {
+                    logWarn("[file-loop] protocol error, close session: ${e.message}")
+                    break
+                }
+
+                when (frame.type) {
+                    TYPE_FILE_OPEN -> {
+                        // path\0 + totalSize(8B) + totalChunks(4B)
+                        val nullIdx = frame.payload.indexOf(0)
+                        if (nullIdx < 0) break
+                        val bb = ByteBuffer.wrap(frame.payload, nullIdx + 1, 12)
+                            .order(ByteOrder.BIG_ENDIAN)
+                        val totalSize   = bb.long
+                        val totalChunks = bb.int
+                        fileRespChannel.trySend(FileMsg.Open(totalSize, totalChunks))
+                    }
+                    TYPE_FILE_CHUNK -> {
+                        if (frame.payload.size < 4) continue
+                        val idx  = ByteBuffer.wrap(frame.payload, 0, 4).order(ByteOrder.BIG_ENDIAN).int
+                        val data = frame.payload.copyOfRange(4, frame.payload.size)
+                        fileRespChannel.trySend(FileMsg.Chunk(idx, data))
+                    }
+                    TYPE_FILE_CLOSE -> {
+                        if (frame.payload.size < 4) continue
+                        val crc = ByteBuffer.wrap(frame.payload).order(ByteOrder.BIG_ENDIAN).int
+                            .toLong() and 0xFFFFFFFFL
+                        fileRespChannel.trySend(FileMsg.Close(crc))
+                    }
+                    TYPE_ACK -> {
+                        // 客户端确认文件接收成功，可记录日志
+                        val msg = frame.payload.toString(Charsets.UTF_8)
+                        Log.d(LOG_TAG, "[file] 客户端 ACK: $msg")
+                    }
+                    TYPE_ERROR -> {
+                        val msg = frame.payload.toString(Charsets.UTF_8)
+                        logWarn("[ClientSession] 文件通道错误: $msg")
+                        fileRespChannel.trySend(FileMsg.Error)
+                    }
+                    else -> logWarn("[ClientSession] file 通道未知类型: 0x${frame.type.toUByte().toString(16)}")
+                }
+            }
+        } catch (e: Exception) {
+            logError("[ClientSession] file 读取循环异常", e)
+        } finally {
+            close("file read loop end")
+        }
+    }
+
+    // --------------------------------------------------------
+    //  内部：心跳发送 + 超时检测
+    // --------------------------------------------------------
+    private suspend fun runHeartbeat() {
+        while (scope.isActive && cmdConn.isOpen) {
+            delay(HEARTBEAT_SEC)
+            val elapsed = System.currentTimeMillis() - lastPongMs.get()
+            if (elapsed > HEARTBEAT_TIMEOUT) {
+                logWarn("[ClientSession] 心跳超时 ${elapsed}ms，主动断开")
+                close("heartbeat timeout")
+                return
+            }
+            cmdConn.sendFrame(TYPE_HEARTBEAT, FLAG_NONE)
+        }
+    }
+
+    // --------------------------------------------------------
+    //  工具
+    // --------------------------------------------------------
+    private fun appendOutput(line: String) { _output.value += "$line\n" }
 
     private fun sanitizeRemotePath(path: String): String? {
         if (path.isBlank() || !path.startsWith('/')) return null
@@ -270,237 +562,45 @@ class ClientSession(
         return path
     }
 
-    private fun shellEscape(value: String): String = value.replace("'", "'\\''")
+    private fun shellEscape(v: String) = "'${v.replace("'", "'\\''")}'"
 
-    private fun longToBigEndian(value: Long): ByteArray {
-        val buffer = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
-        buffer.putLong(value)
-        return buffer.array()
+    private fun reportTransferError(code: TransferErrorCode, message: String) {
+        lastTransferError = TransferError(code, message)
+        logWarn("[ClientSession][$code] $message")
     }
 
-    private fun bigEndianToLong(bytes: ByteArray): Long {
-        return ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN).long
+    private fun logWarn(msg: String)  { FrpLogBus.append(msg); Log.w(LOG_TAG, msg) }
+    private fun logError(msg: String, t: Throwable? = null) { FrpLogBus.append(msg); Log.e(LOG_TAG, msg, t) }
+
+    // --------------------------------------------------------
+    //  数据类 / 枚举 / sealed interface
+    // --------------------------------------------------------
+    data class RegistrationInfo(val deviceName: String, val deviceId: String, val arch: String)
+    data class TransferError(val code: TransferErrorCode, val message: String)
+
+    enum class TransferErrorCode {
+        TIMEOUT, INVALID_LENGTH, IO_INTERRUPTED, PROTOCOL_MISMATCH, CRC_MISMATCH
     }
 
-    private data class CaptureState(
-        val beginMarker: String,
-        val endMarker: String,
-        val result: CompletableDeferred<String?>,
-        val buffer: StringBuilder = StringBuilder(),
-        var started: Boolean = false
-    )
-
-    enum class DownloadResult {
-        Success,
-        NotFound,
-        Failed
+    sealed interface ShellEvent {
+        data class OutputLine(val line: String) : ShellEvent
+        data object CommandEnd : ShellEvent
     }
+
+    enum class DownloadResult { Success, NotFound, Failed }
+
+    sealed interface ListFilesResult {
+        data class Success(val items: List<RemoteFileEntry>) : ListFilesResult
+        data class Error(val message: String) : ListFilesResult
+        data class Failed(val message: String) : ListFilesResult
+    }
+
+    data class RemoteFileEntry(val path: String, val file: Boolean)
 
     companion object {
-        private const val DEFAULT_MANAGED_TIMEOUT_MS = 10_000L
-        private const val FILE_CHUNK_SIZE = 4096
-        // Reduced chunk size to prevent shell command length limit issues and receiver buffer overflows
-        private const val UPLOAD_RAW_CHUNK_SIZE = 512 
-        private const val DOWNLOAD_RAW_CHUNK_SIZE = 3072
-        // Increased max line length to handle command echoes and long paths
-        private const val MAX_LINE = 8192
-        private const val MAX_REMOTE_PATH = 4096
-        private const val LINE_FEED: Byte = 0x0A
-        private const val CLIENT_COMMAND_END_MARKER = "<<END>>"
-        private const val TRANSFER_TIMEOUT_MS = 60_000L
-    }
-
-    private class LineAccumulator(
-        private val maxLineLength: Int,
-        private val onLineTooLong: () -> Unit
-    ) {
-        private val buffer = StringBuilder()
-        private var droppingLongLine = false
-
-        fun append(bytes: ByteArray, start: Int, length: Int): Int {
-            val chars = String(bytes, start, length, StandardCharsets.UTF_8)
-            chars.forEach { ch ->
-                if (droppingLongLine) {
-                    if (ch == '\n') {
-                        droppingLongLine = false
-                    }
-                    return@forEach
-                }
-
-                buffer.append(ch)
-                if (buffer.length > maxLineLength && !buffer.contains("\n")) {
-                    buffer.clear()
-                    droppingLongLine = true
-                    onLineTooLong()
-                }
-            }
-            return length
-        }
-
-        fun readLine(): String? {
-            val lineEnd = buffer.indexOf("\n")
-            if (lineEnd < 0) {
-                if (buffer.length > maxLineLength) {
-                    buffer.clear()
-                    droppingLongLine = true
-                    onLineTooLong()
-                }
-                return null
-            }
-
-            if (lineEnd > maxLineLength) {
-                buffer.delete(0, lineEnd + 1)
-                onLineTooLong()
-                return null
-            }
-
-            val line = buffer.substring(0, lineEnd).trimEnd('\r')
-            buffer.delete(0, lineEnd + 1)
-            return line
-        }
-    }
-
-    private enum class ReceiveState {
-        Idle,
-        DownloadHeader,
-        DownloadBody
-    }
-
-    private data class TransferContext(
-        val targetFile: File,
-        val tmpFile: File,
-        val headerBuffer: ByteArray = ByteArray(8),
-        var headerOffset: Int = 0,
-        var waitSeparator: Boolean = true,
-        var remaining: Long = 0,
-        var outputStream: FileOutputStream? = null,
-        val result: CompletableDeferred<DownloadResult>,
-        val onProgress: ((Long, Long) -> Unit)? = null,
-        var totalSize: Long = 0
-    )
-
-    private fun consumeDownloadHeader(buffer: ByteArray, start: Int, length: Int): Int {
-        val context = transferContext ?: return length
-        var offset = start
-        var remain = length
-
-        // 1. Read 8 bytes size (Big Endian)
-        if (context.headerOffset < 8) {
-            val copy = minOf(8 - context.headerOffset, remain)
-            System.arraycopy(buffer, offset, context.headerBuffer, context.headerOffset, copy)
-            context.headerOffset += copy
-            offset += copy
-            remain -= copy
-        }
-
-        if (context.headerOffset < 8) {
-            return length
-        }
-
-        // 2. Read newline separator
-        if (context.waitSeparator && remain > 0) {
-            val separator = buffer[offset]
-            offset += 1
-            remain -= 1
-            if (separator != LINE_FEED) {
-                resetTransferState("invalid download separator: $separator", cleanupFile = true)
-                return length // Consume all to stop processing
-            }
-            context.waitSeparator = false
-        }
-
-        if (context.waitSeparator) {
-            return length
-        }
-
-        // 3. Parse size and prepare for body
-        val size = bigEndianToLong(context.headerBuffer)
-        // Check for error condition (e.g. file not found might return size 0 or specific error code if protocol defines)
-        // Protocol says: 8 bytes size. If file not found, maybe server sends 0? Or maybe it doesn't send anything and we timeout?
-        // Assuming 0 means empty file.
-        
-        context.tmpFile.parentFile?.mkdirs()
-        context.outputStream = runCatching { FileOutputStream(context.tmpFile, false) }.getOrElse {
-            resetTransferState("open temp file failed: ${it.message}", cleanupFile = true)
-            return length // Consume all
-        }
-        context.remaining = size
-        context.totalSize = size
-        context.onProgress?.invoke(0, size)
-        
-        if (size == 0L) {
-             completeTransferState(DownloadResult.Success, cleanupFile = false)
-        } else {
-             receiveState = ReceiveState.DownloadBody
-        }
-        
-        return length - remain
-    }
-
-    private fun consumeDownloadBody(buffer: ByteArray, start: Int, length: Int): Int {
-        val context = transferContext ?: return length
-        if (context.remaining <= 0) {
-            completeTransferState(DownloadResult.Success, cleanupFile = false)
-            return 0
-        }
-
-        val writeSize = minOf(length.toLong(), context.remaining).toInt()
-        runCatching {
-            context.outputStream?.write(buffer, start, writeSize)
-            context.remaining -= writeSize
-            context.onProgress?.invoke(context.totalSize - context.remaining, context.totalSize)
-        }.onFailure {
-            resetTransferState("write download body failed: ${it.message}", cleanupFile = true)
-            return length
-        }
-
-        if (context.remaining == 0L) {
-            runCatching { context.outputStream?.flush() }
-            runCatching { context.outputStream?.close() }
-            context.outputStream = null
-            
-            if (context.tmpFile.exists() && !context.tmpFile.renameTo(context.targetFile)) {
-                // Try copy and delete if rename fails (e.g. across mount points)
-                val copyOk = runCatching { 
-                    context.tmpFile.copyTo(context.targetFile, overwrite = true)
-                    context.tmpFile.delete()
-                    true
-                }.getOrDefault(false)
-                
-                if (!copyOk) {
-                    resetTransferState("rename temp file failed", cleanupFile = true)
-                    return writeSize
-                }
-            }
-            completeTransferState(DownloadResult.Success, cleanupFile = false)
-        }
-        return writeSize
-    }
-
-    private fun completeTransferState(result: DownloadResult, cleanupFile: Boolean) {
-        val context = transferContext
-        if (context != null && !context.result.isCompleted) {
-            context.result.complete(result)
-        }
-        resetTransferState(null, cleanupFile)
-    }
-
-    private fun resetTransferState(reason: String?, cleanupFile: Boolean) {
-        val context = transferContext
-        if (context != null) {
-            runCatching { context.outputStream?.close() }
-            context.outputStream = null
-            if (cleanupFile) {
-                runCatching { context.tmpFile.delete() }
-            }
-            if (!context.result.isCompleted) {
-                context.result.complete(DownloadResult.Failed)
-            }
-        }
-        transferContext = null
-        receiveState = ReceiveState.Idle
-        if (reason != null) {
-            _output.value += "[transfer reset] $reason\n"
-        }
+        private const val DEFAULT_CMD_TIMEOUT_MS    = 10_000L
+        private const val DOWNLOAD_IDLE_TIMEOUT_MS  = 5_000L
+        private const val MAX_REMOTE_PATH           = 4096
+        private const val LOG_TAG                   = "ClientSession"
     }
 }

@@ -1,7 +1,7 @@
-package com.kgapp.frpshell.ui
+package com.kgapp.frpshellpro.ui
 
 import android.content.Context
-import com.kgapp.frpshell.ui.theme.ThemeMode
+import com.kgapp.frpshellpro.ui.theme.ThemeMode
 
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -33,13 +33,83 @@ class SettingsStore(context: Context) {
         prefs.edit().putFloat(KEY_SHELL_FONT_SIZE_SP, value).apply()
     }
 
+    fun getUploadScriptContent(): String = prefs.getString(KEY_UPLOAD_SCRIPT_CONTENT, "") ?: ""
+
+    fun getQuickCommands(): List<QuickCommandItem> {
+        val raw = prefs.getString(KEY_QUICK_COMMANDS, "[]") ?: "[]"
+        return runCatching {
+            val array = org.json.JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val obj = array.optJSONObject(index) ?: continue
+                    val alias = obj.optString("alias").trim()
+                    val command = obj.optString("command").trim()
+                    if (alias.isNotBlank() && command.isNotBlank()) {
+                        add(QuickCommandItem(alias = alias, command = command))
+                    }
+                }
+            }
+        }.getOrElse { emptyList() }
+    }
+
+    fun setQuickCommands(items: List<QuickCommandItem>) {
+        val array = org.json.JSONArray()
+        items.forEach { item ->
+            array.put(
+                org.json.JSONObject()
+                    .put("alias", item.alias)
+                    .put("command", item.command)
+            )
+        }
+        prefs.edit().putString(KEY_QUICK_COMMANDS, array.toString()).apply()
+    }
+
+
+    fun setUploadScriptContent(value: String) {
+        prefs.edit().putString(KEY_UPLOAD_SCRIPT_CONTENT, value).apply()
+    }
+
+    fun getRecordStreamHost(): String = prefs.getString(KEY_RECORD_STREAM_HOST, DEFAULT_RECORD_STREAM_HOST) ?: DEFAULT_RECORD_STREAM_HOST
+
+    fun setRecordStreamHost(value: String) {
+        prefs.edit().putString(KEY_RECORD_STREAM_HOST, value).apply()
+    }
+
+    fun getRecordStreamPort(): String = prefs.getString(KEY_RECORD_STREAM_PORT, DEFAULT_RECORD_STREAM_PORT.toString()) ?: DEFAULT_RECORD_STREAM_PORT.toString()
+
+    fun setRecordStreamPort(value: String) {
+        prefs.edit().putString(KEY_RECORD_STREAM_PORT, value).apply()
+    }
+
+    fun getRecordStartTemplate(): String = prefs.getString(KEY_RECORD_START_TEMPLATE, DEFAULT_RECORD_START_TEMPLATE) ?: DEFAULT_RECORD_START_TEMPLATE
+
+    fun setRecordStartTemplate(value: String) {
+        prefs.edit().putString(KEY_RECORD_START_TEMPLATE, value).apply()
+    }
+
+    fun getRecordStopTemplate(): String = prefs.getString(KEY_RECORD_STOP_TEMPLATE, DEFAULT_RECORD_STOP_TEMPLATE) ?: DEFAULT_RECORD_STOP_TEMPLATE
+
+    fun setRecordStopTemplate(value: String) {
+        prefs.edit().putString(KEY_RECORD_STOP_TEMPLATE, value).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "frp_shell_settings"
         private const val KEY_INITIALIZED = "initialized"
         private const val KEY_USE_SU = "use_su"
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_SHELL_FONT_SIZE_SP = "shell_font_size_sp"
+        private const val KEY_UPLOAD_SCRIPT_CONTENT = "upload_script_content"
+        private const val KEY_QUICK_COMMANDS = "quick_commands"
+        private const val KEY_RECORD_STREAM_HOST = "record_stream_host"
+        private const val KEY_RECORD_STREAM_PORT = "record_stream_port"
+        private const val KEY_RECORD_START_TEMPLATE = "record_start_template"
+        private const val KEY_RECORD_STOP_TEMPLATE = "record_stop_template"
 
         const val DEFAULT_FONT_SIZE_SP = 14f
+        const val DEFAULT_RECORD_STREAM_HOST = "127.0.0.1"
+        const val DEFAULT_RECORD_STREAM_PORT = 40001
+        const val DEFAULT_RECORD_START_TEMPLATE = "nohup screenrecord --bit-rate 100000 --output-format=h264 - | nc {host} {port} > /dev/null 2>&1 &"
+        const val DEFAULT_RECORD_STOP_TEMPLATE = "pkill -9 screenrecord"
     }
 }
